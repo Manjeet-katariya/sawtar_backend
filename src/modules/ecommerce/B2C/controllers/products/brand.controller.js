@@ -10,7 +10,7 @@ exports.createBrand = asyncHandler(async (req, res, next) => {
     brandData.logo = req.file.path; // Store file path from multer
   }
 
-  const existingBrand = await Brand.findOne({ name: brandData.name.trim() });
+  const existingBrand = await Brand.findOne({ name: brandData.name.trim(), status: { $ne: 0 } });
   if (existingBrand) {
     throw new APIError('Brand name already exists', StatusCodes.CONFLICT);
   }
@@ -32,8 +32,11 @@ exports.createBrand = asyncHandler(async (req, res, next) => {
 });
 
 exports.getAllBrands = asyncHandler(async (req, res, next) => {
-  const { page = 1, limit = 10, search = '' } = req.query;
+  const { page = 1, limit = 10, search = '', status } = req.query;
   const query = search ? { name: { $regex: search, $options: 'i' } } : {};
+  if (status !== undefined) {
+    query.status = Number(status);
+  }
 
   const brands = await Brand.find(query)
     .skip((page - 1) * limit)
@@ -72,7 +75,7 @@ exports.updateBrand = asyncHandler(async (req, res, next) => {
   }
 
   if (updatedData.name && updatedData.name !== brand.name) {
-    const existingBrand = await Brand.findOne({ name: updatedData.name });
+    const existingBrand = await Brand.findOne({ name: updatedData.name, status: { $ne: 0 } });
     if (existingBrand) {
       throw new APIError('Brand name already in use', StatusCodes.CONFLICT);
     }
@@ -88,15 +91,43 @@ exports.updateBrand = asyncHandler(async (req, res, next) => {
   });
 });
 
-exports.deleteBrand = asyncHandler(async (req, res, next) => {
+exports.softDeleteBrand = asyncHandler(async (req, res, next) => {
   const brand = await Brand.findById(req.params.id);
   if (!brand) {
     throw new APIError('Brand not found', StatusCodes.NOT_FOUND);
   }
 
-  await brand.deleteOne();
+  if (brand.status === 0) {
+    throw new APIError('Brand is already deleted', StatusCodes.BAD_REQUEST);
+  }
+
+  brand.status = 0;
+  brand.deletedAt = new Date();
+  await brand.save();
+
   res.status(StatusCodes.OK).json({
     success: true,
-    message: 'Brand deleted successfully'
+    message: 'Brand soft deleted successfully'
+  });
+});
+
+exports.restoreBrand = asyncHandler(async (req, res, next) => {
+  const brand = await Brand.findById(req.params.id);
+  if (!brand) {
+    throw new APIError('Brand not found', StatusCodes.NOT_FOUND);
+  }
+
+  if (brand.status === 1) {
+    throw new APIError('Brand is not deleted', StatusCodes.BAD_REQUEST);
+  }
+
+  brand.status = 1;
+  brand.deletedAt = undefined;
+  await brand.save();
+
+  res.status(StatusCodes.OK).json({
+    success: true,
+    message: 'Brand restored successfully',
+    brand
   });
 });

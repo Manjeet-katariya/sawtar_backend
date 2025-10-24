@@ -116,11 +116,6 @@ exports.validateCreateProduct = [
     .bail()
     .isFloat({ min: 0 }).withMessage('Cost price must be a positive number'),
 
-  body('pricing.mrp')
-    .notEmpty().withMessage('MRP is required')
-    .bail()
-    .isFloat({ min: 0 }).withMessage('MRP must be a positive number'),
-
   body('pricing.sale_price')
     .optional()
     .isFloat({ min: 0 }).withMessage('Sale price must be a positive number'),

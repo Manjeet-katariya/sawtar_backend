@@ -1,3 +1,4 @@
+
 const { body, param, query, validationResult } = require('express-validator');
 const { StatusCodes } = require('../../../../utils/constants/statusCodes');
 const Material = require('../models/material.model');
@@ -31,7 +32,7 @@ exports.validateCreateMaterial = [
     .trim()
     .notEmpty().withMessage('Name is required')
     .custom(async (name) => {
-      const existingMaterial = await Material.findOne({ name });
+      const existingMaterial = await Material.findOne({ name, status: { $ne: 0 } });
       if (existingMaterial) {
         throw new Error('Material name already in use');
       }
@@ -65,7 +66,7 @@ exports.validateUpdateMaterial = [
     .trim()
     .notEmpty().withMessage('Name cannot be empty')
     .custom(async (name, { req }) => {
-      const existingMaterial = await Material.findOne({ name, _id: { $ne: req.params.id } });
+      const existingMaterial = await Material.findOne({ name, _id: { $ne: req.params.id }, status: { $ne: 0 } });
       if (existingMaterial) {
         throw new Error('Material name already in use');
       }
@@ -98,6 +99,13 @@ exports.validateGetAllMaterials = [
   query('limit')
     .optional()
     .isInt({ min: 1 }).withMessage('Limit must be a positive integer'),
+  query('search')
+    .optional()
+    .trim()
+    .isLength({ max: 100 }).withMessage('Search term must not exceed 100 characters'),
+  query('status')
+    .optional()
+    .isIn([0, 1]).withMessage('Status must be 0 (deleted) or 1 (active)'),
   validate
 ];
 

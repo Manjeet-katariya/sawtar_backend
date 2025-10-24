@@ -25,35 +25,27 @@ const logger = winston.createLogger({
 });
 
 
+
+
 exports.createProduct = asyncHandler(async (req, res, next) => {
   const productData = req.body;
 
-  // Log incoming data for debugging
   logger.info('Incoming productData:', JSON.stringify(productData, null, 2));
   logger.info('Incoming files:', JSON.stringify(req.files, null, 2));
 
-  // Parse nested pricing fields from FormData
+  // Vendor only provides base_price and cost_price
   const pricing = {
-    base_price: productData['pricing.base_price'],
-    cost_price: productData['pricing.cost_price'],
-    mrp: productData['pricing.mrp'],
-    currency: productData['pricing.currency'],
-    sale_price: productData['pricing.sale_price'] || undefined,
-    discount: productData['pricing.discount.type'] ? {
-      type: productData['pricing.discount.type'],
-      value: productData['pricing.discount.value'],
-      valid_till: productData['pricing.discount.valid_till']
-    } : undefined,
-    tax: productData['pricing.tax.tax_id'] ? {
-      tax_id: productData['pricing.tax.tax_id'],
-      rate: productData['pricing.tax.rate']
-    } : undefined
+    base_price: Number(productData['pricing.base_price']) || 0,
+    cost_price: Number(productData['pricing.cost_price']) || 0,
+    currency: productData['pricing.currency'], // required
+    sale_price: 0,      // Admin/system handles this
+    discount: undefined, // Admin only
+    tax: undefined,      // Admin only
+    final_price: 0,      // Calculated in model pre-save hook
+    margin: 0            // Calculated in model pre-save hook
   };
 
-  // Log parsed pricing for debugging
-  logger.info('Parsed pricing:', JSON.stringify(pricing, null, 2));
-
-  // Parse color_variants
+  // Parse color variants
   let colorVariants = [];
   if (productData.color_variants) {
     try {
@@ -70,8 +62,6 @@ exports.createProduct = asyncHandler(async (req, res, next) => {
   for (let i = 0; i < colorVariants.length; i++) {
     const variant = colorVariants[i];
     const colorImages = req.files.filter(file => file.fieldname === `color_images_${i}`);
-    logger.info(`Variant ${i} (${variant.color_name}) - Images found: ${colorImages.length}`);
-
     variant.images = colorImages.map((file, index) => ({
       url: file.path,
       position: index + 1,
@@ -94,7 +84,6 @@ exports.createProduct = asyncHandler(async (req, res, next) => {
       uploaded_at: new Date(),
       verified: false
     };
-    logger.info(`Found 3D model file: ${threeDFile.fieldname}`);
   }
 
   // Handle documents
@@ -109,7 +98,6 @@ exports.createProduct = asyncHandler(async (req, res, next) => {
         verified: false,
         uploaded_at: new Date()
       };
-      logger.info(`Found document: ${field}`);
     }
   });
 
@@ -126,17 +114,16 @@ exports.createProduct = asyncHandler(async (req, res, next) => {
 
   try {
     const product = await ProductB2C.create(finalProductData);
-    
-    logger.info(`Product created successfully: ${product._id}`);
+
     res.status(StatusCodes.CREATED).json({
       success: true,
-      message: 'Product created successfully and sent for verification',
+      message: 'Product created by vendor and sent for verification',
       data: {
         product: {
           id: product._id,
           name: product.name,
-          status: product.status,
-          verification_status: product.verification_status
+          pricing: product.pricing,
+          status: product.status
         }
       }
     });
@@ -145,7 +132,7 @@ exports.createProduct = asyncHandler(async (req, res, next) => {
     if (error.name === 'ValidationError') {
       const errors = Object.values(error.errors).map(err => ({
         field: err.path,
-        message: err.message.includes('Cast to ObjectId') ? `${err.path} must be a valid ID` : err.message
+        message: err.message
       }));
       throw new APIError('Validation failed', StatusCodes.BAD_REQUEST, errors);
     }
@@ -156,6 +143,7 @@ exports.createProduct = asyncHandler(async (req, res, next) => {
     throw new APIError('Failed to create product', StatusCodes.INTERNAL_SERVER_ERROR);
   }
 });
+
 // Update product sale_price, discount, and tax (without changing base_price)
 exports.updateProductPricing = asyncHandler(async (req, res, next) => {
   const { id } = req.params;
@@ -219,7 +207,6 @@ exports.updateProductPricing = asyncHandler(async (req, res, next) => {
 
 
 
-
 exports.getAllProducts = asyncHandler(async (req, res, next) => {
   const { 
     product_id, 
@@ -234,7 +221,7 @@ exports.getAllProducts = asyncHandler(async (req, res, next) => {
     brand_id,
     tags,
     attributes,
-    similar // 👈 New: if true, fetch similar products for given product_id
+    similar // fetch similar products
   } = req.query;
 
   const query = {};
@@ -263,11 +250,11 @@ exports.getAllProducts = asyncHandler(async (req, res, next) => {
       throw new APIError('Product not found', StatusCodes.NOT_FOUND);
     }
 
-    query._id = product_id; // For main product fetch
+    query._id = product_id;
   }
 
   // ------------------------------
-  // 2️⃣ Normal Filters
+  // 2️⃣ Filters
   // ------------------------------
   if (vendor_id) query.vendor = vendor_id;
   if (status) query.status = status;
@@ -275,7 +262,6 @@ exports.getAllProducts = asyncHandler(async (req, res, next) => {
   if (category_id) query.category = category_id;
   if (brand_id) query.brand = brand_id;
 
-  // Tags filter
   if (tags) {
     const tagsArray = tags.split(',').map(tag => tag.trim());
     if (tagsArray.some(tag => !mongoose.Types.ObjectId.isValid(tag))) {
@@ -284,26 +270,20 @@ exports.getAllProducts = asyncHandler(async (req, res, next) => {
     query.tags = { $in: tagsArray };
   }
 
-  // Attributes filter
   if (attributes && !product_id) {
     try {
-      const attributesArray = JSON.parse(attributes); 
+      const attributesArray = JSON.parse(attributes);
       const attrIds = [];
       for (const attr of attributesArray) {
         const attributeDoc = await Attribute.findOne({ name: attr.name, values: attr.value });
-        if (attributeDoc) {
-          attrIds.push(attributeDoc._id);
-        }
+        if (attributeDoc) attrIds.push(attributeDoc._id);
       }
-      if (attrIds.length > 0) {
-        query.attributes = { $all: attrIds };
-      }
-    } catch (err) {
+      if (attrIds.length) query.attributes = { $all: attrIds };
+    } catch {
       throw new APIError('Invalid attributes filter format', StatusCodes.BAD_REQUEST);
     }
   }
 
-  // Search filter
   if (!product_id && search) {
     query.$or = [
       { name: { $regex: search, $options: 'i' } },
@@ -312,28 +292,31 @@ exports.getAllProducts = asyncHandler(async (req, res, next) => {
     ];
   }
 
-  // Date filters
   if (!product_id && date_filter) {
     const now = new Date();
-    if (date_filter === 'today') {
-      query.created_at = { $gte: new Date(now.setHours(0,0,0,0)), $lte: new Date(now.setHours(23,59,59,999)) };
-    } else if (date_filter === 'week') {
-      const start = new Date();
-      start.setDate(start.getDate() - 7);
-      query.created_at = { $gte: start };
-    } else if (date_filter === 'month') {
-      const start = new Date();
-      start.setDate(start.getDate() - 30);
-      query.created_at = { $gte: start };
-    } else if (date_filter === 'new') {
-      const start = new Date();
-      start.setDate(start.getDate() - 1);
-      query.created_at = { $gte: start };
+    const start = new Date();
+    switch (date_filter) {
+      case 'today':
+        start.setHours(0,0,0,0);
+        query.created_at = { $gte: start, $lte: new Date(now.setHours(23,59,59,999)) };
+        break;
+      case 'week':
+        start.setDate(start.getDate() - 7);
+        query.created_at = { $gte: start };
+        break;
+      case 'month':
+        start.setDate(start.getDate() - 30);
+        query.created_at = { $gte: start };
+        break;
+      case 'new':
+        start.setDate(start.getDate() - 1);
+        query.created_at = { $gte: start };
+        break;
     }
   }
 
   // ------------------------------
-  // 3️⃣ Fetch Products (Main)
+  // 3️⃣ Fetch Products
   // ------------------------------
   let productsQuery = ProductB2C.find(query)
     .populate('vendor', 'full_name store_details.name email')
@@ -344,7 +327,7 @@ exports.getAllProducts = asyncHandler(async (req, res, next) => {
     .populate('attributes')
     .populate('pricing.currency')
     .populate('pricing.tax.tax_id')
-    .sort({ created_at: -1 })
+    .sort({ createdAt: -1 }) // ✅ corrected to use createdAt
     .lean();
 
   if (!product_id) {
@@ -355,7 +338,41 @@ exports.getAllProducts = asyncHandler(async (req, res, next) => {
   const total = await ProductB2C.countDocuments(query);
 
   // ------------------------------
-  // 4️⃣ Stats (for list)
+  // 4️⃣ Attach Stock Data (Inventory)
+  // ------------------------------
+  const productIds = products.map(p => p._id);
+  const inventoryData = await Inventory.aggregate([
+    { $match: { product: { $in: productIds } } },
+    {
+      $group: {
+        _id: '$product',
+        total_quantity: { $sum: '$quantity' },
+        total_reserved: { $sum: '$reserved' },
+        total_available: { $sum: { $subtract: ['$quantity', '$reserved'] } }
+      }
+    }
+  ]);
+
+  const stockMap = {};
+  inventoryData.forEach(inv => {
+    stockMap[inv._id.toString()] = {
+      total_quantity: inv.total_quantity,
+      total_reserved: inv.total_reserved,
+      total_available: inv.total_available
+    };
+  });
+
+  // Attach stock info to each product
+  products.forEach(product => {
+    product.stock = stockMap[product._id.toString()] || {
+      total_quantity: 0,
+      total_reserved: 0,
+      total_available: 0
+    };
+  });
+
+  // ------------------------------
+  // 5️⃣ Stats (for list)
   // ------------------------------
   let stats = {};
   if (!product_id) {
@@ -365,14 +382,14 @@ exports.getAllProducts = asyncHandler(async (req, res, next) => {
 
     stats = {
       total,
-      today: await ProductB2C.countDocuments({ ...query, created_at: { $gte: todayStart } }),
-      week: await ProductB2C.countDocuments({ ...query, created_at: { $gte: weekStart } }),
-      month: await ProductB2C.countDocuments({ ...query, created_at: { $gte: monthStart } }),
+      today: await ProductB2C.countDocuments({ ...query, createdAt: { $gte: todayStart } }),
+      week: await ProductB2C.countDocuments({ ...query, createdAt: { $gte: weekStart } }),
+      month: await ProductB2C.countDocuments({ ...query, createdAt: { $gte: monthStart } }),
     };
   }
 
   // ------------------------------
-  // 5️⃣ Similar Products (if ?similar=true & product_id given)
+  // 6️⃣ Similar Products
   // ------------------------------
   let similarProducts = [];
   if (similar === 'true' && singleProduct) {
@@ -398,18 +415,24 @@ exports.getAllProducts = asyncHandler(async (req, res, next) => {
   }
 
   // ------------------------------
-  // 6️⃣ Final Response
+  // 7️⃣ Final Response
   // ------------------------------
   logger.info(`Retrieved ${products.length} products`);
-  
+
   res.status(StatusCodes.OK).json({
     success: true,
-    pagination: product_id ? undefined : { page: Number(page), limit: Number(limit), total },
+    pagination: product_id ? undefined : {
+      totalRecords: total,
+      currentPage: Number(page),
+      totalPages: Math.ceil(total / limit),
+      perPage: Number(limit)
+    },
     stats: product_id ? undefined : stats,
     products,
     similar_products: similarProducts.length ? similarProducts : undefined,
   });
 });
+
 
 
 

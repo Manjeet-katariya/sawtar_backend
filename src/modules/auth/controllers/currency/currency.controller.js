@@ -196,7 +196,25 @@ exports.getAllCurrencies = asyncHandler(async (req, res) => {
     filter.isDefault = isDefault === 'true';
   }
 
-  // Query currencies
+  // 👉 If isDefault=true, return a single currency object
+  if (filter.isDefault === true) {
+    const defaultCurrency = await Currency.findOne(filter).sort({ createdAt: -1 });
+
+    if (!defaultCurrency) {
+      return res.status(StatusCodes.NOT_FOUND).json({
+        success: false,
+        message: 'Default currency not found',
+      });
+    }
+
+    return res.status(StatusCodes.OK).json({
+      success: true,
+      message: 'Default currency found',
+      currency: defaultCurrency, // ✅ single object
+    });
+  }
+
+  // 👉 Otherwise, normal paginated query
   const currencies = await Currency.find(filter)
     .sort({ createdAt: -1 })
     .skip(skip)
@@ -214,6 +232,6 @@ exports.getAllCurrencies = asyncHandler(async (req, res) => {
       totalPages: Math.ceil(total / limit),
       perPage: limit,
     },
-    currencies,
+    currencies, // array only when not filtering by isDefault=true
   });
 });

@@ -55,7 +55,16 @@ router.delete(
   // authorize({ minLevel: 5 }),
   // checkPermission('Brands', 'delete'),
   validateBrandId,
-  brandController.deleteBrand
+  brandController.softDeleteBrand
+);
+
+router.post(
+  '/:id/restore',
+  // protect,
+  // authorize({ minLevel: 5 }),
+  // checkPermission('Brands', 'update'),
+  validateBrandId,
+  brandController.restoreBrand
 );
 
 module.exports = router;

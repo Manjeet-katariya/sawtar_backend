@@ -1,3 +1,4 @@
+
 const Material = require('../../models/material.model');
 const { StatusCodes } = require('../../../../../utils/constants/statusCodes');
 const { APIError } = require('../../../../../utils/errorHandler');
@@ -6,7 +7,7 @@ const asyncHandler = require('../../../../../utils/asyncHandler');
 exports.createMaterial = asyncHandler(async (req, res, next) => {
   const materialData = req.body;
 
-  const existingMaterial = await Material.findOne({ name: materialData.name.trim() });
+  const existingMaterial = await Material.findOne({ name: materialData.name.trim(), status: { $ne: 0 } });
   if (existingMaterial) {
     throw new APIError('Material name already exists', StatusCodes.CONFLICT);
   }
@@ -28,12 +29,17 @@ exports.createMaterial = asyncHandler(async (req, res, next) => {
 });
 
 exports.getAllMaterials = asyncHandler(async (req, res, next) => {
-  const { page = 1, limit = 10 } = req.query;
-  const materials = await Material.find()
+  const { page = 1, limit = 10, search = '', status } = req.query;
+  const query = search ? { name: { $regex: search, $options: 'i' } } : {};
+  if (status !== undefined) {
+    query.status = Number(status);
+  }
+
+  const materials = await Material.find(query)
     .skip((page - 1) * limit)
     .limit(Number(limit))
     .lean();
-  const total = await Material.countDocuments();
+  const total = await Material.countDocuments(query);
 
   res.status(StatusCodes.OK).json({
     success: true,
@@ -62,7 +68,7 @@ exports.updateMaterial = asyncHandler(async (req, res, next) => {
 
   const updatedData = req.body;
   if (updatedData.name && updatedData.name !== material.name) {
-    const existingMaterial = await Material.findOne({ name: updatedData.name });
+    const existingMaterial = await Material.findOne({ name: updatedData.name, status: { $ne: 0 } });
     if (existingMaterial) {
       throw new APIError('Material name already in use', StatusCodes.CONFLICT);
     }
@@ -78,15 +84,43 @@ exports.updateMaterial = asyncHandler(async (req, res, next) => {
   });
 });
 
-exports.deleteMaterial = asyncHandler(async (req, res, next) => {
+exports.softDeleteMaterial = asyncHandler(async (req, res, next) => {
   const material = await Material.findById(req.params.id);
   if (!material) {
     throw new APIError('Material not found', StatusCodes.NOT_FOUND);
   }
 
-  await material.deleteOne();
+  if (material.status === 0) {
+    throw new APIError('Material is already deleted', StatusCodes.BAD_REQUEST);
+  }
+
+  material.status = 0;
+  material.deletedAt = new Date();
+  await material.save();
+
   res.status(StatusCodes.OK).json({
     success: true,
-    message: 'Material deleted successfully'
+    message: 'Material soft deleted successfully'
+  });
+});
+
+exports.restoreMaterial = asyncHandler(async (req, res, next) => {
+  const material = await Material.findById(req.params.id);
+  if (!material) {
+    throw new APIError('Material not found', StatusCodes.NOT_FOUND);
+  }
+
+  if (material.status === 1) {
+    throw new APIError('Material is not deleted', StatusCodes.BAD_REQUEST);
+  }
+
+  material.status = 1;
+  material.deletedAt = undefined;
+  await material.save();
+
+  res.status(StatusCodes.OK).json({
+    success: true,
+    message: 'Material restored successfully',
+    material
   });
 });

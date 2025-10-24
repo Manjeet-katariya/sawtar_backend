@@ -1,3 +1,4 @@
+
 const express = require('express');
 const router = express.Router();
 const materialController = require('../controllers/products/material.controller');
@@ -52,7 +53,16 @@ router.delete(
   // authorize({ minLevel: 5 }),
   // checkPermission('Materials', 'delete'),
   validateMaterialId,
-  materialController.deleteMaterial
+  materialController.softDeleteMaterial
+);
+
+router.post(
+  '/:id/restore',
+  // protect,
+  // authorize({ minLevel: 5 }),
+  // checkPermission('Materials', 'update'),
+  validateMaterialId,
+  materialController.restoreMaterial
 );
 
 module.exports = router;

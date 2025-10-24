@@ -31,7 +31,7 @@ exports.validateCreateBrand = [
     .trim()
     .notEmpty().withMessage('Name is required')
     .custom(async (name) => {
-      const existingBrand = await Brand.findOne({ name });
+      const existingBrand = await Brand.findOne({ name, status: { $ne: 0 } });
       if (existingBrand) {
         throw new Error('Brand name already in use');
       }
@@ -41,9 +41,7 @@ exports.validateCreateBrand = [
     .optional()
     .trim()
     .isLength({ max: 500 }).withMessage('Description must not exceed 500 characters'),
-  body('website')
-    .optional()
-    .isURL().withMessage('Invalid website URL'),
+
   body('country')
     .optional()
     .trim()
@@ -74,7 +72,7 @@ exports.validateUpdateBrand = [
     .trim()
     .notEmpty().withMessage('Name cannot be empty')
     .custom(async (name, { req }) => {
-      const existingBrand = await Brand.findOne({ name, _id: { $ne: req.params.id } });
+      const existingBrand = await Brand.findOne({ name, _id: { $ne: req.params.id }, status: { $ne: 0 } });
       if (existingBrand) {
         throw new Error('Brand name already in use');
       }
@@ -120,6 +118,9 @@ exports.validateGetAllBrands = [
     .optional()
     .trim()
     .isLength({ max: 100 }).withMessage('Search term must not exceed 100 characters'),
+  query('status')
+    .optional()
+    .isIn([0, 1]).withMessage('Status must be 0 (deleted) or 1 (active)'),
   validate
 ];
 

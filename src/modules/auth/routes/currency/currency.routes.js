@@ -67,8 +67,7 @@ router.put(
 // Get single currency
 router.get(
   '/:currencyId',
-  protect,
-  authorize({ minLevel: 5 }),
+ 
   checkPermission('Currencies', 'read'),
   validateGetCurrency,
   currencyController.getCurrency
@@ -77,9 +76,7 @@ router.get(
 // Get all currencies
 router.get(
   '/',
-  protect,
-  authorize({ minLevel: 5 }),
-  checkPermission('Currencies', 'read'),
+
   validateGetAllCurrencies,
   currencyController.getAllCurrencies
 );
