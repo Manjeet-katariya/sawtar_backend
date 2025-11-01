@@ -6,52 +6,73 @@ const { Module } = require('../../models/role/module.model');
 const asyncHandler = require('../../../../utils/asyncHandler');
 
 // Create permissions (supports bulk creation)
+// createPermission – supports subModuleId
 exports.createPermission = asyncHandler(async (req, res) => {
   const permissionsData = Array.isArray(req.body) ? req.body : [req.body];
+  const created = [];
 
-  const createdPermissions = [];
+  for (const data of permissionsData) {
+    const { roleId, moduleId, subModuleId, canAdd, canEdit, canView, canDelete, canViewAll } = data;
 
-  for (const permissionData of permissionsData) {
-    const { roleId, moduleId, canAdd, canEdit, canView, canDelete, canViewAll } = permissionData;
+    // Validate Role & Module
+    const role = await Role.findById(roleId);
+    const module = await Module.findById(moduleId);
+    if (!role || !module) throw new APIError('Invalid role or module', StatusCodes.NOT_FOUND);
 
-    // Check if role exists
-    const roleExists = await Role.findById(roleId);
-    if (!roleExists) {
-      throw new APIError(`Role not found for roleId ${roleId}`, StatusCodes.NOT_FOUND);
+    // Validate subModuleId if provided
+    if (subModuleId) {
+      const sub = module.subModules.id(subModuleId);
+      if (!sub || sub.isDeleted) throw new APIError('Submodule not found', StatusCodes.NOT_FOUND);
     }
 
-    // Check if module exists
-    const moduleExists = await Module.findById(moduleId);
-    if (!moduleExists) {
-      throw new APIError(`Module not found for moduleId ${moduleId}`, StatusCodes.NOT_FOUND);
-    }
+    // Check duplicate
+    const exists = await Permission.findOne({ roleId, moduleId, subModuleId, isDeleted: false });
+    if (exists) throw new APIError(`Permission already exists`, StatusCodes.CONFLICT);
 
-    // Check for existing permission
-    const existingPermission = await Permission.findOne({ roleId, moduleId });
-    if (existingPermission) {
-      throw new APIError(`Permission for role ${roleId} and module ${moduleId} already exists`, StatusCodes.CONFLICT);
-    }
-
-    // Create new permission
     const permission = await Permission.create({
-      roleId,
-      moduleId,
-      canAdd: canAdd !== undefined ? canAdd : 0,
-      canEdit: canEdit !== undefined ? canEdit : 0,
-      canView: canView !== undefined ? canView : 0,
-      canDelete: canDelete !== undefined ? canDelete : 0,
-      canViewAll: canViewAll !== undefined ? canViewAll : 0,
+      roleId, moduleId, subModuleId,
+      canAdd: canAdd ?? 0,
+      canEdit: canEdit ?? 0,
+      canView: canView ?? 0,
+      canDelete: canDelete ?? 0,
+      canViewAll: canViewAll ?? 0,
       grantedBy: req.user._id
     });
 
-    createdPermissions.push(permission);
+    created.push(permission);
   }
 
   res.status(StatusCodes.CREATED).json({
     success: true,
-    message: `${createdPermissions.length} permission(s) created successfully`,
-    permissions: createdPermissions
+    message: `${created.length} permission(s) created`,
+    permissions: created
   });
+});
+
+// Soft Delete
+exports.softDeletePermission = asyncHandler(async (req, res) => {
+  const { permissionId } = req.params;
+  const permission = await Permission.findById(permissionId);
+  if (!permission || permission.isDeleted) throw new APIError('Not found', StatusCodes.NOT_FOUND);
+
+  permission.isDeleted = true;
+  permission.deletedAt = new Date();
+  await permission.save();
+
+  res.json({ success: true, message: 'Permission soft deleted' });
+});
+
+// Restore
+exports.restorePermission = asyncHandler(async (req, res) => {
+  const { permissionId } = req.params;
+  const permission = await Permission.findById(permissionId);
+  if (!permission || !permission.isDeleted) throw new APIError('Not deleted', StatusCodes.BAD_REQUEST);
+
+  permission.isDeleted = false;
+  permission.deletedAt = null;
+  await permission.save();
+
+  res.json({ success: true, message: 'Permission restored' });
 });
 
 // Update an existing permission
@@ -118,52 +139,144 @@ exports.getPermission = asyncHandler(async (req, res) => {
   });
 });
 
-// Get all permissions with pagination and filtering
 exports.getAllPermissions = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
   const skip = (page - 1) * limit;
   const { roleCode, moduleId, isActive } = req.query;
 
-  // Build filter
-  const filter = {};
-  
-  // If roleCode is provided in query, use it to find permissions for that role
+  const filter = { isDeleted: false };
+
+  // ✅ Step 1: Filter by Role Code
   if (roleCode) {
-    // First find the role with this code
-    const role = await Role.findOne({ code: roleCode });
+    const role = await Role.findOne({ code: roleCode.trim() });
     if (!role) {
       return res.status(StatusCodes.NOT_FOUND).json({
         success: false,
-        message: 'Role not found with the provided code'
+        message: 'Role not found with the provided code',
       });
     }
     filter.roleId = role._id;
   }
-  
+
   if (moduleId) filter.moduleId = moduleId;
   if (isActive !== undefined) filter.isActive = isActive === 'true';
 
-  // Query permissions
+  // ✅ Step 2: Fetch permissions
   const permissions = await Permission.find(filter)
     .populate('roleId', 'name code')
-    .populate('moduleId')
+    .populate('moduleId', 'name route icon subModules')
+    .populate('grantedBy', 'name email')
     .sort({ createdAt: -1 })
     .skip(skip)
-    .limit(limit);
+    .limit(limit)
+    .lean();
 
+  // ✅ Step 3: Extract relevant submodule (only the one matching subModuleId)
+  const formattedPermissions = permissions.map((perm) => {
+    const subModule =
+      perm.subModuleId && perm.moduleId?.subModules?.length
+        ? perm.moduleId.subModules.find(
+            (s) => s._id.toString() === perm.subModuleId.toString()
+          )
+        : null;
+
+    return {
+      _id: perm._id,
+      role: perm.roleId,
+      module: {
+        _id: perm.moduleId?._id,
+        name: perm.moduleId?.name,
+        route: perm.moduleId?.route,
+        icon: perm.moduleId?.icon,
+      },
+      subModule: subModule
+        ? {
+            _id: subModule._id,
+            name: subModule.name,
+            route: subModule.route,
+            icon: subModule.icon,
+          }
+        : null,
+      permissions: {
+        canAdd: perm.canAdd,
+        canEdit: perm.canEdit,
+        canView: perm.canView,
+        canDelete: perm.canDelete,
+        canViewAll: perm.canViewAll,
+      },
+      isActive: perm.isActive,
+      grantedBy: perm.grantedBy,
+      createdAt: perm.createdAt,
+    };
+  });
+
+  // ✅ Step 4: Count and return
   const total = await Permission.countDocuments(filter);
 
   res.status(StatusCodes.OK).json({
     success: true,
-    count: permissions.length,
-    message: `${permissions.length} permissions found`,
+    count: formattedPermissions.length,
+    message: `${formattedPermissions.length} permissions found`,
     pagination: {
       totalRecords: total,
       currentPage: page,
       totalPages: Math.ceil(total / limit),
-      perPage: limit
+      perPage: limit,
     },
-    permissions
+    permissions: formattedPermissions,
   });
 });
+
+
+
+
+// ✅ YOUR CODE IS PERFECT - Add this endpoint for frontend
+exports.getMyPermissions = asyncHandler(async (req, res) => {
+  const filter = {
+    roleId: req.user.role._id,
+    isActive: true,
+    isDeleted: false
+  };
+
+  const permissions = await Permission.find(filter)
+    .populate('roleId', 'name code')
+    .populate('moduleId', 'name route icon subModules')
+    .populate('grantedBy', 'name email')
+    .lean();
+
+  const formatted = permissions.map(perm => {
+    const subModule = perm.subModuleId && perm.moduleId?.subModules?.length
+      ? perm.moduleId.subModules.find(s => s._id.toString() === perm.subModuleId.toString())
+      : null;
+
+    return {
+      _id: perm._id,
+      role: perm.roleId,
+      module: {
+        _id: perm.moduleId?._id,
+        name: perm.moduleId?.name,
+        route: perm.moduleId?.route,
+        icon: perm.moduleId?.icon,
+      },
+      subModule: subModule ? {
+        _id: subModule._id,
+        name: subModule.name,
+        route: subModule.route,
+        icon: subModule.icon,
+      } : null,
+      permissions: {
+        canAdd: perm.canAdd,
+        canEdit: perm.canEdit,
+        canView: perm.canView,
+        canDelete: perm.canDelete,
+        canViewAll: perm.canViewAll,
+      }
+    };
+  });
+
+  res.json({ success: true, permissions: formatted });
+});
+
+
+

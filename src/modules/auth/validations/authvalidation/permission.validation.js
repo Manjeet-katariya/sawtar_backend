@@ -28,68 +28,36 @@ const isValidObjectId = (value, fieldName) => {
 };
 
 exports.validateCreatePermission = [
-  body().isArray().withMessage('Request body must be an array of permissions'),
-  body('*.roleId')
-    .custom(value => isValidObjectId(value, 'Role ID'))
-    .bail()
-    .custom(async (roleId, { req, path }) => {
-      const index = parseInt(path.match(/\d+/)[0]);
-      const role = await Role.findById(roleId);
-      if (!role) {
-        throw new Error(`Role not found at index ${index}`);
-      }
-      return true;
-    })
-    .bail(),
-  body('*.moduleId')
-    .custom(value => isValidObjectId(value, 'Module ID'))
-    .bail()
-    .custom(async (moduleId, { req, path }) => {
-      const index = parseInt(path.match(/\d+/)[0]);
-      const module = await Module.findById(moduleId);
-      if (!module) {
-        throw new Error(`Module not found at index ${index}`);
-      }
-      return true;
-    })
-    .bail(),
-  body('*.canAdd')
-    .optional()
-    .isIn([0, 1])
-    .withMessage('canAdd must be 0 or 1')
-    .bail(),
-  body('*.canEdit')
-    .optional()
-    .isIn([0, 1])
-    .withMessage('canEdit must be 0 or 1')
-    .bail(),
-  body('*.canView')
-    .optional()
-    .isIn([0, 1])
-    .withMessage('canView must be 0 or 1')
-    .bail(),
-  body('*.canDelete')
-    .optional()
-    .isIn([0, 1])
-    .withMessage('canDelete must be 0 or 1')
-    .bail(),
-  body('*.canViewAll')
-    .optional()
-    .isIn([0, 1])
-    .withMessage('canViewAll must be 0 or 1')
-    .bail(),
-  body()
-    .custom(async (permissions, { req }) => {
-      for (let i = 0; i < permissions.length; i++) {
-        const { roleId, moduleId } = permissions[i];
-        const existing = await Permission.findOne({ roleId, moduleId });
-        if (existing) {
-          throw new Error(`Permission for role ${roleId} and module ${moduleId} already exists at index ${i}`);
-        }
-      }
-      return true;
-    })
-    .bail(),
+  body().isArray().withMessage('Body must be array'),
+  body('*.roleId').custom(isValidObjectId).custom(async (id, { req, path }) => {
+    const i = path.match(/\d+/)[0];
+    const role = await Role.findById(id);
+    if (!role) throw new Error(`Role not found at [${i}]`);
+    return true;
+  }),
+  body('*.moduleId').custom(isValidObjectId).custom(async (id, { req, path }) => {
+    const i = path.match(/\d+/)[0];
+    const module = await Module.findById(id);
+    if (!module) throw new Error(`Module not found at [${i}]`);
+    return true;
+  }),
+  body('*.subModuleId').optional().custom(async (id, { req, path }) => {
+    if (!id) return true;
+    const i = path.match(/\d+/)[0];
+    const moduleId = req.body[i]?.moduleId;
+    const module = await Module.findById(moduleId);
+    const sub = module?.subModules.id(id);
+    if (!sub || sub.isDeleted) throw new Error(`Submodule not found at [${i}]`);
+    return true;
+  }),
+  body('*.can*').optional().isIn([0,1]),
+  body().custom(async (arr) => {
+    for (let i = 0; i < arr.length; i++) {
+      const { roleId, moduleId, subModuleId } = arr[i];
+      const exists = await Permission.findOne({ roleId, moduleId, subModuleId, isDeleted: false });
+      if (exists) throw new Error(`Duplicate at index ${i}`);
+    }
+  }),
   validate
 ];
 

@@ -6,7 +6,7 @@ const asyncHandler = require('../../../../utils/asyncHandler');
 const bcrypt = require('bcryptjs');
 const { createToken } = require('../../../../middleware/auth');
 const { Role } = require('../../models/role/role.model');
-
+const Category = require('../../../ecommerce/B2C/models/category.model'); // Adjust path to your Category model
 // Configure Winston logger
 const logger = winston.createLogger({
   level: 'info',
@@ -62,174 +62,76 @@ exports.vendorLogin = asyncHandler(async (req, res, next) => {
   }
 });
 
-// Create Vendor
-exports.createVendor = asyncHandler(async (req, res, next) => {
+
+exports.createVendor = asyncHandler(async (req, res) => {
   const vendorData = req.body;
-
-  // Validate required fields
-  if (!vendorData.email) {
-    throw new APIError('Email is required', StatusCodes.BAD_REQUEST);
+  // ✅ Step 1: Confirm passwords match
+  if (vendorData.password !== vendorData.confirmPassword) {
+    throw new APIError('Passwords do not match', StatusCodes.BAD_REQUEST);
   }
 
-  // Check duplicate vendor
-  const existingVendor = await VendorB2C.findOne({
-    $or: [
-      { email: vendorData.email.toLowerCase().trim() },
-      { mobile: vendorData.mobile }
-    ]
-  });
+  // ✅ Step 2: Remove confirmPassword from object (never store it)
+  delete vendorData.confirmPassword;
 
-  if (existingVendor) {
-    if (existingVendor.email === vendorData.email.toLowerCase().trim()) {
-      logger.warn(`Vendor creation failed: Duplicate email - ${vendorData.email}`);
-      throw new APIError('Vendor email already exists', StatusCodes.CONFLICT);
-    }
-    if (existingVendor.mobile === vendorData.mobile) {
-      logger.warn(`Vendor creation failed: Duplicate mobile - ${vendorData.mobile}`);
-      throw new APIError('Vendor mobile number already exists', StatusCodes.CONFLICT);
-    }
-  }
-
-  // Mobile verification check
-  if (!vendorData.is_mobile_verified) {
-    throw new APIError('Mobile must be verified', StatusCodes.BAD_REQUEST);
-  }
-
+  // Role assignment
   const vendorRole = await Role.findOne({ name: 'Vendor-B2C' });
-  if (!vendorRole) {
-    throw new APIError('Vendor role not available', StatusCodes.NOT_FOUND);
-  }
+  if (!vendorRole) throw new APIError('Vendor role not available', StatusCodes.NOT_FOUND);
   vendorData.role = vendorRole._id;
 
-  // Ensure status_info exists
-  vendorData.status_info = vendorData.status_info || {};
-  vendorData.status_info.status = 0; // 0 = pending
+  // Default status
+  vendorData.status_info = { status: 0 }; // pending
 
-  // Hash password
+  // Password hash
   vendorData.password = await bcrypt.hash(vendorData.password, 10);
 
-  // Parse categories if sent as string
-  if (vendorData.store_details && vendorData.store_details.categories) {
-    let parsedCategories = vendorData.store_details.categories;
-    if (typeof parsedCategories === 'string') {
-      try {
-        parsedCategories = JSON.parse(parsedCategories);
-        vendorData.store_details.categories = parsedCategories;
-      } catch (error) {
-        throw new APIError('Invalid categories format', StatusCodes.BAD_REQUEST);
-      }
-    }
-
-    // Validate categories structure
-    if (!Array.isArray(vendorData.store_details.categories) ||
-        vendorData.store_details.categories.length === 0) {
-      throw new APIError('At least one category is required', StatusCodes.BAD_REQUEST);
-    }
-
-    for (const category of vendorData.store_details.categories) {
-      if (!category.name || typeof category.name !== 'string') {
-        throw new APIError('Each category must have a valid name', StatusCodes.BAD_REQUEST);
-      }
-    }
+  // Convert categories if needed
+  if (vendorData.store_details?.categories?.length) {
+    vendorData.store_details.categories = vendorData.store_details.categories.map(c => new mongoose.Types.ObjectId(c));
   }
 
-  // Handle logo upload
-  if (req.files && req.files.logo) {
-    vendorData.store_details = vendorData.store_details || {};
+  // Logo
+  if (req.files?.logo) {
     vendorData.store_details.logo = req.files.logo[0].path;
   }
 
-  // Handle uploaded documents
+  // Documents
   vendorData.documents = {};
-
-  if (req.files) {
-    const fileHandlers = {
-      identityProof: () => {
-        vendorData.documents.identity_proof = {
-          type: 'identity_proof',
-          path: req.files.identityProof[0].path,
-          verified: false,
-          uploaded_at: new Date()
-        };
-      },
-      addressProof: () => {
-        vendorData.documents.address_proof = {
-          type: 'address_proof',
-          path: req.files.addressProof[0].path,
-          verified: false,
-          uploaded_at: new Date()
-        };
-      },
-      gstCertificate: () => {
-        vendorData.documents.gst_certificate = {
-          type: 'gst_certificate',
-          path: req.files.gstCertificate[0].path,
-          verified: false,
-          uploaded_at: new Date()
-        };
-      }
-    };
-
-    Object.keys(req.files).forEach(fileType => {
-      if (fileHandlers[fileType]) {
-        fileHandlers[fileType]();
-      }
-    });
-  }
-
-  // Validate at least one document is provided
-  const hasDocuments = Object.keys(vendorData.documents).some(key => {
-    const doc = vendorData.documents[key];
-    return doc !== undefined;
+  const docMap = {
+    identityProof: 'identity_proof',
+    addressProof: 'address_proof',
+    gstCertificate: 'gst_certificate'
+  };
+  Object.keys(req.files || {}).forEach(k => {
+    if (docMap[k]) {
+      vendorData.documents[docMap[k]] = {
+        type: docMap[k],
+        path: req.files[k][0].path,
+        verified: false,
+        uploaded_at: new Date()
+      };
+    }
   });
 
-  if (!hasDocuments) {
-    throw new APIError('At least one document is required', StatusCodes.BAD_REQUEST);
-  }
+  // Create vendor
+  const vendor = await VendorB2C.create(vendorData);
+  vendor.meta.change_history = [{
+    updated_by: req.user?._id || null,
+    updated_at: new Date(),
+    changes: ['Vendor created']
+  }];
+  await vendor.save();
 
-  try {
-    // Create vendor
-    const vendor = await VendorB2C.create(vendorData);
+  const populated = await VendorB2C.findById(vendor._id)
+    .populate('store_details.categories', 'name slug')
+    .select('email full_name store_details status_info.status');
 
-    // Log creation in change history
-    vendor.meta.change_history = vendor.meta.change_history || [];
-    vendor.meta.change_history.push({
-      updated_by: req.user?._id || null, // If created by admin, req.user may be available
-      updated_at: new Date(),
-      changes: ['Vendor created']
-    });
-    await vendor.save();
+  logger.info(`Vendor created: ${vendor._id}`);
 
-    logger.info(`Vendor created successfully: ${vendor._id}`);
-
-    res.status(StatusCodes.CREATED).json({
-      success: true,
-      message: 'Vendor created successfully',
-      data: {
-        vendor: {
-          id: vendor._id,
-          email: vendor.email,
-          full_name: vendor.full_name,
-          store_details: vendor.store_details,
-          status: vendor.status_info.status
-        }
-      }
-    });
-  } catch (error) {
-    logger.error(`Vendor creation failed: ${error.message}`);
-
-    if (error.name === 'ValidationError') {
-      const errors = Object.values(error.errors).map(err => err.message);
-      throw new APIError(`Validation failed: ${errors.join(', ')}`, StatusCodes.BAD_REQUEST);
-    }
-
-    if (error.code === 11000) {
-      const field = Object.keys(error.keyValue)[0];
-      throw new APIError(`${field} already exists`, StatusCodes.CONFLICT);
-    }
-
-    throw new APIError('Server error while creating vendor', StatusCodes.INTERNAL_SERVER_ERROR);
-  }
+  res.status(StatusCodes.CREATED).json({
+    success: true,
+    message: 'Vendor created successfully',
+    data: populated
+  });
 });
 
 // Get All Vendors

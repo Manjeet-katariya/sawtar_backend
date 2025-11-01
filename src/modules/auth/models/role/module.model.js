@@ -1,65 +1,33 @@
-// modules/auth/models/role/module.model.js
+// models/role/module.model.js
 const mongoose = require('mongoose');
 
+const SubModuleSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true },
+  route: { type: String, required: true, trim: true },
+  icon: { type: String, trim: true, default: 'fas fa-circle' },
+  isActive: { type: Boolean, default: true },
+  position: { type: Number, default: 0 },
+  dashboardView: { type: Boolean, default: false },
+  isDeleted: { type: Boolean, default: false },
+  deletedAt: { type: Date }
+}, { _id: true });
+
 const ModuleSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true,
-    maxlength: 50
-  },
-  slug: {
-    type: String,
-    unique: true,
-    lowercase: true,
-    trim: true
-  },
-  description: {
-    type: String,
-    trim: true,
-    maxlength: 300
-  },
-  icon: {
-    type: String,
-    trim: true,
-    default: 'fas fa-folder' // e.g., 'fas fa-users' for Users module
-  },
-  route: {
-    type: String,
-    unique: true,
-    trim: true,
-    required: true // e.g., '/products' or '/employee/leads'
-  },
-  subModules: [
-    {
-      _id: {
-        type: mongoose.Schema.Types.ObjectId,
-        default: () => new mongoose.Types.ObjectId()
-      },
-      name: { type: String, required: true, trim: true },  // e.g., 'New Lead'
-      route: { type: String, required: true, trim: true }, // e.g., '/employee/leads/new'
-      icon: { type: String, trim: true, default: 'fas fa-circle' },
-      isActive: { type: Boolean, default: true },
-      position: { type: Number, default: 0 },
-      dashboardView: { type: Boolean, default: false } // 👈 new field for subModules too
-    }
-  ],
-  isActive: {
-    type: Boolean,
-    default: true
-  },
-  position: {
-    type: Number,
-    default: 0
-  },
-  dashboardView: {
-    type: Boolean,
-    default: false // 👈 new field for main module
-  }
+  name: { type: String, required: true, unique: true, trim: true, maxlength: 50 },
+  slug: { type: String, unique: true, lowercase: true, trim: true },
+  description: { type: String, trim: true, maxlength: 300 },
+  icon: { type: String, trim: true, default: 'fas fa-folder' },
+  route: { type: String, unique: true, trim: true, required: true },
+  subModules: [SubModuleSchema],
+  isActive: { type: Boolean, default: true },
+  position: { type: Number, default: 0 },
+  dashboardView: { type: Boolean, default: false },
+  isDeleted: { type: Boolean, default: false },
+  deletedAt: { type: Date }
 }, { timestamps: true });
 
-ModuleSchema.pre('save', function(next) {
+// Auto slug
+ModuleSchema.pre('save', function (next) {
   if (this.isModified('name') && this.name) {
     this.slug = this.name
       .toLowerCase()
@@ -69,6 +37,5 @@ ModuleSchema.pre('save', function(next) {
   next();
 });
 
-const Module = mongoose.model("Module", ModuleSchema);
-
+const Module = mongoose.model('Module', ModuleSchema);
 module.exports = { Module };

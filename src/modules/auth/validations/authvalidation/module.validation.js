@@ -1,16 +1,19 @@
+// validations/authvalidation/module.validation.js
 const { body, param, query, validationResult } = require('express-validator');
 const { StatusCodes } = require('../../../../utils/constants/statusCodes');
 const { Module } = require('../../models/role/module.model');
 const mongoose = require('mongoose');
 
-// Validation middleware
+// ---------------------------------------------------------------------
+// Common validation helper
+// ---------------------------------------------------------------------
 const validate = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(StatusCodes.BAD_REQUEST).json({
       success: false,
       statusCode: StatusCodes.BAD_REQUEST,
-      errors: errors.array().map((err) => ({
+      errors: errors.array().map(err => ({
         field: err.path,
         message: err.msg
       }))
@@ -19,7 +22,6 @@ const validate = (req, res, next) => {
   next();
 };
 
-// Custom validator for MongoDB ObjectId
 const isValidObjectId = (value, fieldName) => {
   if (!mongoose.Types.ObjectId.isValid(value)) {
     throw new Error(`${fieldName} must be a valid MongoDB ObjectId`);
@@ -27,253 +29,362 @@ const isValidObjectId = (value, fieldName) => {
   return true;
 };
 
-// Custom validator to check if module exists
-const checkModuleExistence = async (moduleId) => {
+const checkModuleExistence = async moduleId => {
   const module = await Module.findById(moduleId);
-  if (!module) {
-    throw new Error('Module not found');
-  }
+  if (!module) throw new Error('Module not found');
   return true;
 };
 
-// Validation for creating modules (supports array)
+const checkSubModuleExistence = async (moduleId, subModuleId) => {
+  const module = await Module.findById(moduleId);
+  if (!module) throw new Error('Module not found');
+  const sub = module.subModules.id(subModuleId);
+  if (!sub) throw new Error('Sub-module not found');
+  return true;
+};
+
+// ---------------------------------------------------------------------
+// CREATE MODULE (single or bulk)
+// ---------------------------------------------------------------------
 exports.validateCreateModule = [
-  body().custom((value) => {
+  body().custom(value => {
     if (!Array.isArray(value) && typeof value !== 'object') {
-      throw new Error('Request body must be an object or array of modules');
+      throw new Error('Body must be an object or an array of objects');
     }
     return true;
   }),
-  body('*.name')
+
+  // ---- ARRAY CASE ----
+  body()
+    .if(body().isArray())
+    .custom(async (arr, { req }) => {
+      for (let i = 0; i < arr.length; i++) {
+        const el = arr[i];
+        if (!el.name) throw new Error(`modules[${i}].name is required`);
+        if (!el.route) throw new Error(`modules[${i}].route is required`);
+
+        const nameExists = await Module.findOne({ name: el.name });
+        if (nameExists) throw new Error(`modules[${i}].name "${el.name}" already exists`);
+
+        const routeExists = await Module.findOne({ route: el.route });
+        if (routeExists) throw new Error(`modules[${i}].route "${el.route}" already exists`);
+      }
+      return true;
+    }),
+
+  // ---- SINGLE OBJECT CASE ----
+  body('name')
+    .if(body().custom(v => !Array.isArray(v)))
     .trim()
     .notEmpty()
     .withMessage('Name is required')
-    .bail()
     .isLength({ max: 50 })
-    .withMessage('Name cannot exceed 50 characters')
-    .bail()
-    .custom(async (name, { req, path }) => {
-      const index = path.includes('[') ? parseInt(path.match(/\d+/)[0]) : 'single';
-      const existingModule = await Module.findOne({ name });
-      if (existingModule) {
-        throw new Error(`Module with name "${name}" already exists at ${index}`);
-      }
-      return true;
-    })
-    .bail(),
-  body('*.description')
-    .optional()
-    .trim()
-    .isLength({ max: 300 })
-    .withMessage('Description cannot exceed 300 characters')
-    .bail(),
-  body('*.icon')
-    .optional()
-    .trim()
-    .bail(),
-  body('*.route')
+    .withMessage('Name ≤ 50 chars')
+    .custom(async name => {
+      if (await Module.findOne({ name })) throw new Error('Name already exists');
+    }),
+
+  body('route')
+    .if(body().custom(v => !Array.isArray(v)))
     .trim()
     .notEmpty()
     .withMessage('Route is required')
-    .bail()
-    .custom(async (route, { req, path }) => {
-      const index = path.includes('[') ? parseInt(path.match(/\d+/)[0]) : 'single';
-      const existingModule = await Module.findOne({ route });
-      if (existingModule) {
-        throw new Error(`Module with route "${route}" already exists at ${index}`);
-      }
-      return true;
-    })
-    .bail(),
-  body('*.subModules')
+    .custom(async route => {
+      if (await Module.findOne({ route })) throw new Error('Route already exists');
+    }),
+
+  body('description')
+    .optional()
+    .trim()
+    .isLength({ max: 300 })
+    .withMessage('Description ≤ 300 chars'),
+
+  body('icon').optional().trim(),
+  body('position').optional().isNumeric().withMessage('position must be a number'),
+
+  // ---- SUB-MODULES ----
+  body('subModules')
     .optional()
     .isArray()
-    .withMessage('subModules must be an array')
-    .bail(),
-  body('*.subModules.*.name')
-    .if(body('*.subModules').exists())
+    .withMessage('subModules must be an array'),
+
+  body('subModules.*.name')
+    .if(body('subModules').exists())
     .trim()
     .notEmpty()
-    .withMessage('Submodule name is required')
-    .bail(),
-  body('*.subModules.*.route')
-    .if(body('*.subModules').exists())
+    .withMessage('Sub-module name required'),
+
+  body('subModules.*.route')
+    .if(body('subModules').exists())
     .trim()
     .notEmpty()
-    .withMessage('Submodule route is required')
-    .bail(),
-  body('*.subModules.*.icon')
-    .optional()
-    .trim()
-    .bail(),
-  body('*.subModules.*.isActive')
-    .optional()
-    .isBoolean()
-    .withMessage('Submodule isActive must be a boolean')
-    .bail(),
-  body('*.subModules.*.position')
-    .optional()
-    .isNumeric()
-    .withMessage('Submodule position must be a number')
-    .bail(),
-  body('*.position')
-    .optional()
-    .isNumeric()
-    .withMessage('Position must be a number')
-    .bail(),
+    .withMessage('Sub-module route required')
+    .custom(async (route, { req }) => {
+      // uniqueness across **all** modules (except the one being created)
+      const exists = await Module.findOne({
+        'subModules.route': route,
+        'subModules.isDeleted': false
+      });
+      if (exists) throw new Error(`Sub-module route "${route}" already exists`);
+    }),
+
+  body('subModules.*.icon').optional().trim(),
+  body('subModules.*.isActive').optional().isBoolean(),
+  body('subModules.*.position').optional().isNumeric(),
+  body('subModules.*.dashboardView').optional().isBoolean(),
+
   validate
 ];
 
-// Validation for updating a module
+// ---------------------------------------------------------------------
+// UPDATE MODULE
+// ---------------------------------------------------------------------
 exports.validateUpdateModule = [
   param('moduleId')
-    .custom((value) => isValidObjectId(value, 'Module ID'))
+    .custom(v => isValidObjectId(v, 'Module ID'))
     .bail()
     .custom(checkModuleExistence)
     .bail(),
+
   body('name')
     .optional()
     .trim()
     .notEmpty()
     .withMessage('Name cannot be empty')
-    .bail()
     .isLength({ max: 50 })
-    .withMessage('Name cannot exceed 50 characters')
-    .bail()
+    .withMessage('Name ≤ 50 chars')
     .custom(async (name, { req }) => {
-      const existingModule = await Module.findOne({ name, _id: { $ne: req.params.moduleId } });
-      if (existingModule) {
-        throw new Error('Module with this name already exists');
-      }
-      return true;
-    })
-    .bail(),
+      const exists = await Module.findOne({ name, _id: { $ne: req.params.moduleId } });
+      if (exists) throw new Error('Module with this name already exists');
+    }),
+
   body('description')
     .optional()
     .trim()
     .isLength({ max: 300 })
-    .withMessage('Description cannot exceed 300 characters')
-    .bail(),
-  body('icon')
-    .optional()
-    .trim()
-    .bail(),
+    .withMessage('Description ≤ 300 chars'),
+
+  body('icon').optional().trim(),
+
   body('route')
     .optional()
     .trim()
     .notEmpty()
     .withMessage('Route cannot be empty')
-    .bail()
     .custom(async (route, { req }) => {
-      const existingModule = await Module.findOne({ route, _id: { $ne: req.params.moduleId } });
-      if (existingModule) {
-        throw new Error('Module with this route already exists');
-      }
-      return true;
-    })
-    .bail(),
+      const exists = await Module.findOne({ route, _id: { $ne: req.params.moduleId } });
+      if (exists) throw new Error('Module with this route already exists');
+    }),
+
   body('subModules')
     .optional()
     .isArray()
-    .withMessage('subModules must be an array')
-    .bail(),
+    .withMessage('subModules must be an array'),
+
   body('subModules.*.name')
     .if(body('subModules').exists())
     .trim()
     .notEmpty()
-    .withMessage('Submodule name is required')
-    .bail(),
+    .withMessage('Sub-module name required'),
+
   body('subModules.*.route')
     .if(body('subModules').exists())
     .trim()
     .notEmpty()
-    .withMessage('Submodule route is required')
-    .bail(),
-  body('subModules.*.icon')
-    .optional()
-    .trim()
-    .bail(),
-  body('subModules.*.isActive')
-    .optional()
-    .isBoolean()
-    .withMessage('Submodule isActive must be a boolean')
-    .bail(),
-  body('subModules.*.position')
-    .optional()
-    .isNumeric()
-    .withMessage('Submodule position must be a number')
-    .bail(),
-  body('isActive')
-    .optional()
-    .isBoolean()
-    .withMessage('isActive must be a boolean')
-    .bail(),
-  body('position')
-    .optional()
-    .isNumeric()
-    .withMessage('Position must be a number')
-    .bail(),
+    .withMessage('Sub-module route required')
+    .custom(async (route, { req }) => {
+      const exists = await Module.findOne({
+        'subModules.route': route,
+        _id: { $ne: req.params.moduleId },
+        'subModules.isDeleted': false
+      });
+      if (exists) throw new Error(`Sub-module route "${route}" already exists`);
+    }),
+
+  body('subModules.*.icon').optional().trim(),
+  body('subModules.*.isActive').optional().isBoolean(),
+  body('subModules.*.position').optional().isNumeric(),
+  body('subModules.*.dashboardView').optional().isBoolean(),
+
+  body('isActive').optional().isBoolean(),
+  body('position').optional().isNumeric(),
   validate
 ];
 
-// Validation for reordering modules
+// ---------------------------------------------------------------------
+// REORDER MODULES
+// ---------------------------------------------------------------------
 exports.validateReorderModules = [
-  body('modules')
-    .isArray()
-    .withMessage('Modules must be an array'),
-  body('modules.*._id')
-    .custom((value) => isValidObjectId(value, 'Module ID')),
-  body('modules.*.position')
-    .isNumeric()
-    .withMessage('Position must be a number'),
+  body('modules').isArray().withMessage('Modules must be an array'),
+  body('modules.*._id').custom(v => isValidObjectId(v, 'Module ID')),
+  body('modules.*.position').isNumeric().withMessage('Position must be a number'),
   validate
 ];
 
-// Validation for deleting a module
+// ---------------------------------------------------------------------
+// DELETE MODULE
+// ---------------------------------------------------------------------
 exports.validateDeleteModule = [
   param('moduleId')
-    .custom((value) => isValidObjectId(value, 'Module ID'))
+    .custom(v => isValidObjectId(v, 'Module ID'))
     .bail()
     .custom(checkModuleExistence)
     .bail()
-    .custom(async (moduleId) => {
+    .custom(async moduleId => {
       const { Permission } = require('../../models/role/permission.model');
-      const permissions = await Permission.find({ moduleId });
-      if (permissions.length > 0) {
-        throw new Error('Cannot delete module with associated permissions');
-      }
-      return true;
+      const perms = await Permission.find({ moduleId });
+      if (perms.length) throw new Error('Cannot delete module with associated permissions');
     })
     .bail(),
   validate
 ];
 
-// Validation for getting a single module
+// ---------------------------------------------------------------------
+// GET SINGLE MODULE
+// ---------------------------------------------------------------------
 exports.validateGetModule = [
   param('moduleId')
-    .custom((value) => isValidObjectId(value, 'Module ID'))
+    .custom(v => isValidObjectId(v, 'Module ID'))
     .bail()
     .custom(checkModuleExistence)
     .bail(),
   validate
 ];
 
-// Validation for getting all modules
+// ---------------------------------------------------------------------
+// GET ALL MODULES
+// ---------------------------------------------------------------------
 exports.validateGetAllModules = [
   query('isActive')
     .optional()
     .isIn(['true', 'false'])
-    .withMessage('isActive must be either "true" or "false"')
-    .bail(),
+    .withMessage('isActive must be "true" or "false"'),
   query('page')
     .optional()
     .isInt({ min: 1 })
-    .withMessage('Page must be a positive integer')
-    .bail(),
+    .withMessage('page must be ≥ 1'),
   query('limit')
     .optional()
     .isInt({ min: 1 })
-    .withMessage('Limit must be a positive integer')
+    .withMessage('limit must be ≥ 1'),
+  validate
+];
+
+// ---------------------------------------------------------------------
+// CREATE SUB-MODULE(S)
+// ---------------------------------------------------------------------
+exports.validateCreateSubModule = [
+  param('moduleId')
+    .custom(v => isValidObjectId(v, 'Module ID'))
+    .bail()
+    .custom(checkModuleExistence)
     .bail(),
+
+  body().custom(value => {
+    if (!Array.isArray(value) && typeof value !== 'object')
+      throw new Error('Body must be an object or an array of objects');
+    return true;
+  }),
+
+  // ---- ARRAY ----
+  body()
+    .if(body().isArray())
+    .custom(async (arr, { req }) => {
+      for (let i = 0; i < arr.length; i++) {
+        const el = arr[i];
+        if (!el.name) throw new Error(`subModules[${i}].name is required`);
+        if (!el.route) throw new Error(`subModules[${i}].route is required`);
+
+        const exists = await Module.findOne({
+          'subModules.route': el.route,
+          _id: { $ne: req.params.moduleId },
+          'subModules.isDeleted': false
+        });
+        if (exists) throw new Error(`subModules[${i}].route "${el.route}" already exists`);
+      }
+    }),
+
+  // ---- SINGLE ----
+  body('name')
+    .if(body().custom(v => !Array.isArray(v)))
+    .trim()
+    .notEmpty()
+    .withMessage('Sub-module name required'),
+
+  body('route')
+    .if(body().custom(v => !Array.isArray(v)))
+    .trim()
+    .notEmpty()
+    .withMessage('Sub-module route required')
+    .custom(async (route, { req }) => {
+      const exists = await Module.findOne({
+        'subModules.route': route,
+        _id: { $ne: req.params.moduleId },
+        'subModules.isDeleted': false
+      });
+      if (exists) throw new Error(`Sub-module route "${route}" already exists`);
+    }),
+
+  body('icon').optional().trim(),
+  body('isActive').optional().isBoolean(),
+  body('dashboardView').optional().isBoolean(),
+  body('position').optional().isNumeric(),
+  validate
+];
+
+// ---------------------------------------------------------------------
+// UPDATE SUB-MODULE
+// ---------------------------------------------------------------------
+exports.validateUpdateSubModule = [
+  param('moduleId')
+    .custom(v => isValidObjectId(v, 'Module ID'))
+    .bail()
+    .custom(checkModuleExistence)
+    .bail(),
+  param('subModuleId')
+    .custom(v => isValidObjectId(v, 'Sub-module ID'))
+    .bail()
+    .custom((v, { req }) => checkSubModuleExistence(req.params.moduleId, v))
+    .bail(),
+
+  body('name').optional().trim().notEmpty().withMessage('Name cannot be empty'),
+  body('route')
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage('Route cannot be empty')
+    .custom(async (route, { req }) => {
+      const exists = await Module.findOne({
+        'subModules.route': route,
+        _id: { $ne: req.params.moduleId },
+        'subModules.isDeleted': false
+      });
+      if (exists) throw new Error(`Sub-module route "${route}" already exists`);
+    }),
+
+  body('icon').optional().trim(),
+  body('isActive').optional().isBoolean(),
+  body('dashboardView').optional().isBoolean(),
+  body('position').optional().isNumeric(),
+  validate
+];
+
+// ---------------------------------------------------------------------
+// REORDER SUB-MODULES
+// ---------------------------------------------------------------------
+exports.validateReorderSubModules = [
+  param('moduleId')
+    .custom(v => isValidObjectId(v, 'Module ID'))
+    .bail()
+    .custom(checkModuleExistence)
+    .bail(),
+  body('subModules')
+    .isArray()
+    .withMessage('subModules must be an array'),
+  body('subModules.*._id')
+    .custom(v => isValidObjectId(v, 'Sub-module ID')),
+  body('subModules.*.position')
+    .isNumeric()
+    .withMessage('position must be a number'),
   validate
 ];

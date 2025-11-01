@@ -1,196 +1,358 @@
-const { StatusCodes } = require('../../../../utils/constants/statusCodes');
-const { APIError } = require('../../../../utils/errorHandler');
+// controllers/module/module.controller.js
+const asyncHandler = require('../../../../utils/asyncHandler');
 const { Module } = require('../../models/role/module.model');
 const { Permission } = require('../../models/role/permission.model');
-const asyncHandler = require('../../../../utils/asyncHandler');
+const APIError = require('../../../../utils/errorHandler');
+const { StatusCodes } = require('../../../../utils/constants/statusCodes');
+const { autoAssignPosition, autoSubModulePosition } = require('../../../../utils/position');
 
-// Create modules (supports bulk creation)
+// CREATE (bulk + auto position)
 exports.createModule = asyncHandler(async (req, res) => {
-  const modulesData = Array.isArray(req.body) ? req.body : [req.body];
+  const modules = Array.isArray(req.body) ? req.body : [req.body];
+  const created = [];
 
-  const createdModules = [];
+  for (const data of modules) {
+    const { name, description, icon, route, subModules = [], position } = data;
 
-  for (const moduleData of modulesData) {
-    const { name, description, icon, route, subModules, position } = moduleData;
+    const modulePos = await autoAssignPosition(Module, { position });
 
-    const existingModule = await Module.findOne({ $or: [{ name }, { route }] });
-    if (existingModule) {
-      throw new APIError(`Module with name "${name}" or route "${route}" already exists`, StatusCodes.CONFLICT);
+    const subs = [];
+    let maxSubPos = -1;
+    for (const sub of subModules) {
+      const suppliedPos = typeof sub.position === 'number' ? sub.position : null;
+      const nextPos = suppliedPos !== null && suppliedPos >= 0 ? suppliedPos : maxSubPos + 1;
+
+      if (suppliedPos !== null && suppliedPos >= 0) {
+        subs.forEach(s => { if (s.position >= suppliedPos) s.position += 1; });
+      }
+      maxSubPos = Math.max(maxSubPos, nextPos);
+
+      subs.push({
+        name: sub.name,
+        route: sub.route,
+        icon: sub.icon || 'fas fa-circle',
+        isActive: sub.isActive ?? true,
+        position: nextPos,
+        dashboardView: sub.dashboardView ?? false
+      });
     }
 
     const module = await Module.create({
-      name,
-      slug: name.toLowerCase().replace(/\s+/g, '-'),
-      description,
-      icon: icon || 'fas fa-folder',
-      route,
-      subModules: subModules || [],
-      position: position || 0
+      name, description, icon: icon || 'fas fa-folder', route,
+      subModules: subs, position: modulePos
     });
 
-    createdModules.push(module);
+    created.push(module);
   }
 
   res.status(StatusCodes.CREATED).json({
     success: true,
-    message: `${createdModules.length} module(s) created successfully`,
-    modules: createdModules
+    message: `${created.length} module(s) created`,
+    data: created
   });
 });
 
-// Update an existing module
+// UPDATE (any field + position + subModules)
 exports.updateModule = asyncHandler(async (req, res) => {
   const { moduleId } = req.params;
-  const { name, description, icon, route, subModules, isActive, position } = req.body;
+  const updates = req.body;
 
   const module = await Module.findById(moduleId);
-  if (!module) {
+  if (!module || module.isDeleted) {
     throw new APIError('Module not found', StatusCodes.NOT_FOUND);
   }
 
-  if (name || route) {
-    const existing = await Module.findOne({
-      $or: [{ name: name || module.name }, { route: route || module.route }],
-      _id: { $ne: moduleId }
-    });
-    if (existing) {
-      throw new APIError('Module with this name or route already exists', StatusCodes.CONFLICT);
-    }
+  // Uniqueness: name & route
+  if (updates.name || updates.route) {
+    const query = { _id: { $ne: moduleId }, isDeleted: false };
+    if (updates.name) query.name = updates.name;
+    if (updates.route) query.route = updates.route;
+    const conflict = await Module.findOne(query);
+    if (conflict) throw new APIError('Name or route already in use', StatusCodes.CONFLICT);
   }
 
-  module.name = name || module.name;
-  module.slug = name ? name.toLowerCase().replace(/\s+/g, '-') : module.slug;
-  module.description = description || module.description;
-  module.icon = icon || module.icon;
-  module.route = route || module.route;
-  module.subModules = subModules !== undefined ? subModules : module.subModules;
-  module.isActive = isActive !== undefined ? isActive : module.isActive;
-  module.position = position !== undefined ? position : module.position;
+  // POSITION: shift others if changed
+  if (typeof updates.position === 'number' && updates.position !== module.position) {
+    const oldPos = module.position;
+    const newPos = updates.position;
+
+    if (newPos > oldPos) {
+      await Module.updateMany(
+        { position: { $gt: oldPos, $lte: newPos }, isDeleted: false },
+        { $inc: { position: -1 } }
+      );
+    } else if (newPos < oldPos) {
+      await Module.updateMany(
+        { position: { $gte: newPos, $lt: oldPos }, isDeleted: false },
+        { $inc: { position: 1 } }
+      );
+    }
+    module.position = newPos;
+  }
+
+  // SUB-MODULES: full replace + auto position
+  if (Array.isArray(updates.subModules)) {
+    const subs = [];
+    let maxPos = -1;
+    for (const sub of updates.subModules) {
+      const pos = typeof sub.position === 'number' ? sub.position : maxPos + 1;
+      if (typeof sub.position === 'number') {
+        subs.forEach(s => { if (s.position >= pos) s.position += 1; });
+      }
+      maxPos = Math.max(maxPos, pos);
+      subs.push({ ...sub, position: pos });
+    }
+    module.subModules = subs;
+  }
+
+  Object.assign(module, updates);
+  if (updates.name) module.slug = updates.name.toLowerCase().replace(/\s+/g, '-');
 
   await module.save();
 
-  res.status(StatusCodes.OK).json({
-    success: true,
-    message: 'Module updated successfully',
-    module
-  });
+  res.json({ success: true, data: module });
 });
 
-// Update module positions
+// REORDER MODULES (drag & drop)
 exports.reorderModules = asyncHandler(async (req, res) => {
   const { modules } = req.body;
-
-  if (!Array.isArray(modules)) {
-    throw new APIError('Modules must be an array', StatusCodes.BAD_REQUEST);
-  }
+  if (!Array.isArray(modules)) throw new APIError('Invalid input', StatusCodes.BAD_REQUEST);
 
   for (const { _id, position } of modules) {
-    const module = await Module.findById(_id);
-    if (!module) {
-      throw new APIError(`Module with ID ${_id} not found`, StatusCodes.NOT_FOUND);
-    }
-    module.position = position;
-    await module.save();
+    await Module.updateOne({ _id, isDeleted: false }, { position });
   }
-
-  res.status(StatusCodes.OK).json({
-    success: true,
-    message: 'Module positions updated successfully'
-  });
+  res.json({ success: true, message: 'Reordered' });
 });
 
-// Delete a module
+// SOFT DELETE
 exports.deleteModule = asyncHandler(async (req, res) => {
   const { moduleId } = req.params;
-
   const module = await Module.findById(moduleId);
-  if (!module) {
-    throw new APIError('Module not found', StatusCodes.NOT_FOUND);
-  }
+  if (!module || module.isDeleted) throw new APIError('Module not found', StatusCodes.NOT_FOUND);
 
-  const permissions = await Permission.find({ moduleId });
-  if (permissions.length > 0) {
-    throw new APIError('Cannot delete module with associated permissions', StatusCodes.BAD_REQUEST);
-  }
+  const perms = await Permission.find({ moduleId, isDeleted: false });
+  if (perms.length) throw new APIError('Cannot delete: has permissions', StatusCodes.BAD_REQUEST);
 
-  await module.deleteOne();
+  module.isDeleted = true;
+  module.deletedAt = new Date();
+  await module.save();
 
-  res.status(StatusCodes.OK).json({
-    success: true,
-    message: 'Module deleted successfully'
-  });
+  // Close position gap
+  await Module.updateMany(
+    { position: { $gt: module.position }, isDeleted: false },
+    { $inc: { position: -1 } }
+  );
+
+  res.json({ success: true, message: 'Module soft-deleted' });
 });
 
-// Get a single module by ID
-exports.getModule = asyncHandler(async (req, res) => {
+// CREATE SUB-MODULE(S) in existing module
+exports.createSubModule = asyncHandler(async (req, res) => {
   const { moduleId } = req.params;
+  const subModules = Array.isArray(req.body) ? req.body : [req.body];
 
   const module = await Module.findById(moduleId);
-  if (!module) {
-    throw new APIError('Module not found', StatusCodes.NOT_FOUND);
+  if (!module || module.isDeleted) throw new APIError('Module not found', StatusCodes.NOT_FOUND);
+
+  const created = [];
+
+  for (const data of subModules) {
+    const { name, route, icon, isActive, dashboardView, position } = data;
+
+    // Check route uniqueness globally
+    const routeExists = await Module.findOne({
+      'subModules.route': route,
+      _id: { $ne: moduleId },
+      'subModules.isDeleted': false
+    });
+    if (routeExists) throw new APIError(`Sub-module route "${route}" already exists`, StatusCodes.CONFLICT);
+
+    const pos = autoSubModulePosition(module.subModules, { position });
+
+    const sub = {
+      name,
+      route,
+      icon: icon || 'fas fa-circle',
+      isActive: isActive ?? true,
+      dashboardView: dashboardView ?? false,
+      position: pos
+    };
+
+    module.subModules.push(sub);
+    created.push(sub);
   }
 
-  res.status(StatusCodes.OK).json({
+  await module.save();
+  res.status(StatusCodes.CREATED).json({
     success: true,
-    message: 'Module retrieved successfully',
-    module
+    message: `${created.length} sub-module(s) created`,
+    data: created
   });
 });
 
-// Get all modules with pagination and filtering
-exports.getAllModules = asyncHandler(async (req, res) => {
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 10;
-  const skip = (page - 1) * limit;
-  const { isActive } = req.query;
+// UPDATE SUB-MODULE
+exports.updateSubModule = asyncHandler(async (req, res) => {
+  const { moduleId, subModuleId } = req.params;
+  const updates = req.body;
 
-  const filter = {};
+  const module = await Module.findById(moduleId);
+  if (!module || module.isDeleted) throw new APIError('Module not found', StatusCodes.NOT_FOUND);
+
+  const sub = module.subModules.id(subModuleId);
+  if (!sub || sub.isDeleted) throw new APIError('Sub-module not found', StatusCodes.NOT_FOUND);
+
+  if (updates.route && updates.route !== sub.route) {
+    const exists = await Module.findOne({
+      'subModules.route': updates.route,
+      _id: { $ne: moduleId },
+      'subModules.isDeleted': false
+    });
+    if (exists) throw new APIError('Route already in use', StatusCodes.CONFLICT);
+  }
+
+  if (typeof updates.position === 'number' && updates.position !== sub.position) {
+    const oldPos = sub.position;
+    const newPos = updates.position;
+
+    if (newPos > oldPos) {
+      module.subModules.forEach(s => {
+        if (s.position > oldPos && s.position <= newPos && !s.isDeleted) s.position -= 1;
+      });
+    } else if (newPos < oldPos) {
+      module.subModules.forEach(s => {
+        if (s.position >= newPos && s.position < oldPos && !s.isDeleted) s.position += 1;
+      });
+    }
+    sub.position = newPos;
+  }
+
+  Object.assign(sub, updates);
+  await module.save();
+
+  res.json({ success: true, data: sub });
+});
+
+// SOFT DELETE SUB-MODULE
+exports.deleteSubModule = asyncHandler(async (req, res) => {
+  const { moduleId, subModuleId } = req.params;
+
+  const module = await Module.findById(moduleId);
+  if (!module || module.isDeleted) throw new APIError('Module not found', StatusCodes.NOT_FOUND);
+
+  const sub = module.subModules.id(subModuleId);
+  if (!sub || sub.isDeleted) throw new APIError('Sub-module not found', StatusCodes.NOT_FOUND);
+
+  sub.isDeleted = true;
+  sub.deletedAt = new Date();
+
+  // Close gap
+  module.subModules.forEach(s => {
+    if (s.position > sub.position && !s.isDeleted) s.position -= 1;
+  });
+
+  await module.save();
+  res.json({ success: true, message: 'Sub-module soft-deleted' });
+});
+
+// RESTORE SUB-MODULE
+exports.restoreSubModule = asyncHandler(async (req, res) => {
+  const { moduleId, subModuleId } = req.params;
+
+  const module = await Module.findById(moduleId);
+  if (!module || module.isDeleted) throw new APIError('Module not found', StatusCodes.NOT_FOUND);
+
+  const sub = module.subModules.id(subModuleId);
+  if (!sub || !sub.isDeleted) throw new APIError('Sub-module not deleted', StatusCodes.BAD_REQUEST);
+
+  sub.isDeleted = false;
+  sub.deletedAt = null;
+
+  const newPos = autoSubModulePosition(module.subModules, { position: sub.position });
+  sub.position = newPos;
+
+  await module.save();
+  res.json({ success: true, data: sub });
+});
+
+// REORDER SUB-MODULES (drag & drop)
+exports.reorderSubModules = asyncHandler(async (req, res) => {
+  const { moduleId } = req.params;
+  const { subModules } = req.body; // [{ _id, position }]
+
+  const module = await Module.findById(moduleId);
+  if (!module || module.isDeleted) throw new APIError('Module not found', StatusCodes.NOT_FOUND);
+
+  const map = new Map(subModules.map(s => [s._id.toString(), s.position]));
+  module.subModules.forEach(sub => {
+    const pos = map.get(sub._id.toString());
+    if (typeof pos === 'number') sub.position = pos;
+  });
+
+  // Normalize
+  const active = module.subModules.filter(s => !s.isDeleted);
+  active.sort((a, b) => a.position - b.position);
+  active.forEach((s, i) => s.position = i);
+
+  await module.save();
+  res.json({ success: true, message: 'Sub-modules reordered' });
+});
+
+// RESTORE
+exports.restoreModule = asyncHandler(async (req, res) => {
+  const { moduleId } = req.params;
+  const module = await Module.findById(moduleId);
+  if (!module || !module.isDeleted) throw new APIError('Module not deleted', StatusCodes.BAD_REQUEST);
+
+  module.isDeleted = false;
+  module.deletedAt = null;
+
+  // Re-open position
+  const newPos = await autoAssignPosition(Module, { position: module.position });
+  module.position = newPos;
+
+  await module.save();
+  res.json({ success: true, data: module });
+});
+
+// GET ALL (excludes deleted)
+exports.getAllModules = asyncHandler(async (req, res) => {
+  const { page = 1, limit = 10, isActive } = req.query;
+  const filter = { isDeleted: false };
   if (isActive !== undefined) filter.isActive = isActive === 'true';
 
   const modules = await Module.find(filter)
-    .sort({ position: 1, createdAt: -1 })
-    .skip(skip)
-    .limit(limit);
+    .sort({ position: 1 })
+    .skip((page - 1) * limit)
+    .limit(+limit);
 
   const total = await Module.countDocuments(filter);
 
-  res.status(StatusCodes.OK).json({
+  res.json({
     success: true,
-    count: modules.length,
-    message: `${modules.length} modules found`,
-    pagination: {
-      totalRecords: total,
-      currentPage: page,
-      totalPages: Math.ceil(total / limit),
-      perPage: limit
-    },
-    modules
+    data: modules,
+    pagination: { page: +page, limit: +limit, total }
   });
 });
 
-// Get menu for dashboard
+// GET MENU (active + not deleted)
 exports.getMenu = asyncHandler(async (req, res) => {
-  let modules;
-  if (req.user.role.isSuperAdmin) {
-    modules = await Module.find({ isActive: true }).sort({ position: 1, name: 1 });
-  } else {
-    const perms = await Permission.find({ roleId: req.user.role._id, isActive: true }).populate('actions');
-    const moduleIds = perms.map(p => p.moduleId);
-    modules = await Module.find({ _id: { $in: moduleIds }, isActive: true }).sort({ position: 1, name: 1 });
-  }
+  const filter = { isActive: true, isDeleted: false };
+  const modules = await Module.find(filter).sort({ position: 1 });
 
   const menu = modules.map(m => ({
-    _id: m._id,
-    name: m.name,
-    icon: m.icon,
-    route: m.route,
+    ...m.toObject(),
     subModules: m.subModules
-      .filter(sm => sm.isActive)
-      .sort((a, b) => (a.position || 0) - (b.position || 0))
+      .filter(s => s.isActive && !s.isDeleted)
+      .sort((a, b) => a.position - b.position)
   }));
 
-  res.status(StatusCodes.OK).json({
-    success: true,
-    menu
-  });
+  res.json({ success: true, data: menu });
+});
+
+// GET SINGLE MODULE (added for completeness – used by validateGetModule)
+exports.getModule = asyncHandler(async (req, res) => {
+  const { moduleId } = req.params;
+  const module = await Module.findById(moduleId);
+  if (!module || module.isDeleted) throw new APIError('Module not found', StatusCodes.NOT_FOUND);
+  res.json({ success: true, data: module });
 });

@@ -12,6 +12,7 @@ const {
   validateGetAllPermissions,
 } = require('../../validations/authvalidation/permission.validation');
 
+
 // Create permission
 router.post(
   '/',
@@ -21,6 +22,13 @@ router.post(
   validateCreatePermission,
   permissionController.createPermission
 );
+router.get(
+  '/my',
+  protect,
+  authorize({ minLevel: 10 }),
+  permissionController.getMyPermissions
+);
+
 
 // Update permission
 router.put(

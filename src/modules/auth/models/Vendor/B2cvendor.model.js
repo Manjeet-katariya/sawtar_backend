@@ -1,9 +1,5 @@
 const mongoose = require('mongoose');
 
-const category_schema = new mongoose.Schema({
-  name: { type: String, required: [true, 'Category name is required'], trim: true },
-  subcategories: [{ type: String, trim: true }]
-});
 
 const store_details_schema = new mongoose.Schema({
   store_name: { type: String, required: [true], trim: true },
@@ -13,7 +9,7 @@ const store_details_schema = new mongoose.Schema({
   pincode: { type: String, trim: true },
   website: { type: String, trim: true },
   logo: { type: String, trim: true },
-  categories: [category_schema],
+  categories: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true }], // Reference Category model
   social_links: {
     facebook: { type: String, trim: true },
     twitter: { type: String, trim: true },

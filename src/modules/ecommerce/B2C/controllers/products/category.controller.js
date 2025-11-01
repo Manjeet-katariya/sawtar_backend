@@ -163,14 +163,6 @@ exports.getAllCategories = asyncHandler(async (req, res, next) => {
     },
     categories,
     hierarchy: buildCategoryHierarchy(activeCategories),
-    filters: {
-      search,
-      includeDeleted: includeDeleted === 'true',
-      status: status || null,
-      highlighted: highlighted === 'true',
-      special: special === 'true',
-      showInMenu: showInMenu === 'true'
-    }
   });
 });
 

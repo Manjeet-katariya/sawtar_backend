@@ -1,3 +1,4 @@
+// models/role/permission.model.js
 const mongoose = require('mongoose');
 
 const PermissionSchema = new mongoose.Schema({
@@ -11,42 +12,31 @@ const PermissionSchema = new mongoose.Schema({
     ref: 'Module',
     required: true
   },
-  canAdd: {
-    type: Number,
-    enum: [0, 1],
-    default: 0
+  subModuleId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Module.subModules',
+    default: null
   },
-  canEdit: {
-    type: Number,
-    enum: [0, 1],
-    default: 0
-  },
-  canView: {
-    type: Number,
-    enum: [0, 1],
-    default: 0
-  },
-  canDelete: {
-    type: Number,
-    enum: [0, 1],
-    default: 0
-  },
-  canViewAll: {
-    type: Number,
-    enum: [0, 1],
-    default: 0
-  },
+  canAdd: { type: Number, enum: [0, 1], default: 0 },
+  canEdit: { type: Number, enum: [0, 1], default: 0 },
+  canView: { type: Number, enum: [0, 1], default: 0 },
+  canDelete: { type: Number, enum: [0, 1], default: 0 },
+  canViewAll: { type: Number, enum: [0, 1], default: 0 },
   grantedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
-    default: null // optional: who assigned this permission
+    default: null
   },
-  isActive: {
-    type: Boolean,
-    default: true // Keep isActive as Boolean since it wasn't requested to change
-  }
+  isActive: { type: Boolean, default: true },
+  isDeleted: { type: Boolean, default: false },     // Soft delete
+  deletedAt: { type: Date }
 }, { timestamps: true });
 
-const Permission = mongoose.model("Permission", PermissionSchema);
+// Unique: one permission per (role + module + subModule)
+PermissionSchema.index(
+  { roleId: 1, moduleId: 1, subModuleId: 1 },
+  { unique: true, sparse: true }
+);
 
+const Permission = mongoose.model("Permission", PermissionSchema);
 module.exports = { Permission };

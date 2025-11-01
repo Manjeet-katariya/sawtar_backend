@@ -168,61 +168,53 @@ exports.protectCustomer = async (req, res, next) => {
   }
 };
 
+// In protectMulti
 exports.protectMulti = async (req, res, next) => {
   try {
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
+    let token = req.headers.authorization?.startsWith('Bearer') 
+      ? req.headers.authorization.split(' ')[1] 
+      : null;
 
-    if (!token) {
-      throw new APIError('Not authorized to access this route', StatusCodes.UNAUTHORIZED);
-    }
+    if (!token) throw new APIError('No token', StatusCodes.UNAUTHORIZED);
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    let entity;
-    if (decoded.type === 'user') {
-      entity = await User.findById(decoded.id).populate({
-        path: 'role',
-        model: Role,
-      });
-    } else if (decoded.type === 'vendorb2c') {
-      entity = await Vendorb2c.findById(decoded.id).populate('role');
-    } else {
-      throw new APIError('Invalid token type', StatusCodes.UNAUTHORIZED);
-    }
+    const entityMap = {
+      user: User,
+      vendorb2c: Vendorb2c,
+      vendorb2b: Vendorb2b,
+      freelancer: Freelancer,
+      business: Business,
+      customer: Customer,
+    };
 
-    if (!entity || !entity.isActive) {
-      throw new APIError('Not authorized to access this route', StatusCodes.UNAUTHORIZED);
-    }
+    const Model = entityMap[decoded.type];
+    if (!Model) throw new APIError('Invalid token type', StatusCodes.UNAUTHORIZED);
 
-    req.user = entity; // Set req.user to either User or VendorB2C document
+    const entity = await Model.findById(decoded.id).populate('role');
+    if (!entity || !entity.isActive) throw new APIError('Unauthorized', StatusCodes.UNAUTHORIZED);
+
+    // Cache permissions
+    entity.permissions = await exports.getUserPermissions(entity.role._id);
+    req.user = entity;
     next();
   } catch (error) {
     next(error);
   }
 };
 
+// authorize – use role.code
 exports.authorize = (options = {}) => {
-  return async (req, res, next) => {
+  return (req, res, next) => {
     try {
-      if (req.user.role.isSuperAdmin) {
-        return next();
-      }
+      if (req.user.role.isSuperAdmin) return next();
 
       if (options.minLevel && req.user.role.level < options.minLevel) {
-        throw new APIError(
-          `Your role level is insufficient to access this route`,
-          StatusCodes.FORBIDDEN
-        );
+        throw new APIError('Insufficient role level', StatusCodes.FORBIDDEN);
       }
 
-      if (options.roles && !options.roles.includes(req.user.role._id.toString())) {
-        throw new APIError(
-          `Your role is not authorized to access this route`,
-          StatusCodes.FORBIDDEN
-        );
+      if (options.roles && !options.roles.includes(req.user.role.code)) {
+        throw new APIError(`Role not allowed: ${options.roles.join(', ')}`, StatusCodes.FORBIDDEN);
       }
 
       next();
