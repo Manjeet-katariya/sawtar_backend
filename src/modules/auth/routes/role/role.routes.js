@@ -1,9 +1,9 @@
 // modules/auth/routes/role.routes.js
 const express = require('express');
 const router = express.Router();
-const { protect, authorize } = require('../../../../middleware/auth');
+const { protectMulti,authorize } = require('../../../../middleware/auth');
 const { checkPermission } = require('../../../../middleware/permission');
-const roleController = require('../../controllers/role/role.controller');
+const controller = require('../../controllers/role/role.controller');
 const {
   validateCreateRole,
   validateUpdateRole,
@@ -11,77 +11,80 @@ const {
   validateGetRole,
   validateGetAllRoles,
   validatePermanentDeleteRole,
-  validateRestoreRole,
+  validateRestoreRole
 } = require('../../validations/authvalidation/role.validation');
-
-// Create role
 router.post(
   '/',
-  protect,
-  authorize({ minLevel: 10 }),
-  checkPermission('Roles', 'create'),
   validateCreateRole,
-  roleController.createRole
+  controller.createRole
 );
 
-// Update role
-router.put(
-  '/:roleId',
-  protect,
-  authorize({ minLevel: 10 }),
-  checkPermission('Roles', 'update'),
-  validateUpdateRole,
-  roleController.updateRole
-);
-
-// Soft delete role
-router.delete(
-  '/:roleId',
-  protect,
-  authorize({ minLevel: 10 }),
-  checkPermission('Roles', 'delete'),
-  validateDeleteRole,
-  roleController.deleteRole
-);
-
-// Permanent delete role
-router.delete(
-  '/:roleId/permanent',
-  protect,
-  authorize({ minLevel: 10 }),
-  checkPermission('Roles', 'delete'),
-  validatePermanentDeleteRole,
-  roleController.permanentDeleteRole
-);
-
-// Restore role
-router.put(
-  '/:roleId/restore',
-  protect,
-  authorize({ minLevel: 10 }),
-  checkPermission('Roles', 'update'),
-  validateRestoreRole,
-  roleController.restoreRole
-);
-
-// Get single role
-router.get(
-  '/:roleId',
-  protect,
-  authorize({ minLevel: 5 }),
-  checkPermission('Roles', 'read'),
-  validateGetRole,
-  roleController.getRole
-);
-
-// Get all roles
 router.get(
   '/',
-  protect,
-  authorize({ minLevel: 5 }),
-  checkPermission('Roles', 'read'),
+  // checkPermission('Role', 'view'),
   validateGetAllRoles,
-  roleController.getAllRoles
+  controller.getAllRoles
+);
+
+// ===================================================================
+// ALL ROUTES UNDER "Role" MODULE
+// ===================================================================
+router.use(
+  protectMulti,
+  authorize({
+    roles: ['SuperAdmin', 'Admin'], // Only these can manage permissions
+  }),
+  checkPermission('Permission', 'view') // Base permission check for access
+);
+
+// CREATE ROLE
+
+// UPDATE ROLE
+router.put(
+  '/:roleId',
+  checkPermission('Role', 'update'),
+  validateUpdateRole,
+  controller.updateRole
+);
+
+// SOFT DELETE ROLE
+router.delete(
+  '/:roleId',
+  checkPermission('Role', 'delete'),
+  validateDeleteRole,
+  controller.deleteRole
+);
+
+// PERMANENT DELETE ROLE
+router.delete(
+  '/:roleId/permanent',
+  checkPermission('Role', 'delete'),
+  validatePermanentDeleteRole,
+  controller.permanentDeleteRole
+);
+
+// RESTORE ROLE
+router.patch(
+  '/:roleId/restore',
+  checkPermission('Role', 'update'),
+  validateRestoreRole,
+  controller.restoreRole
+);
+
+// GET SINGLE ROLE
+router.get(
+  '/:roleId',
+  checkPermission('Role', 'view'),
+  validateGetRole,
+  controller.getRole
+);
+
+// GET ALL ROLES
+router.get(
+  '/',
+  checkPermission('Role', 'view'),
+  validateGetAllRoles,
+  controller.getAllRoles
 );
 
 module.exports = router;

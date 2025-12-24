@@ -1,183 +1,110 @@
-const jwt = require('jsonwebtoken');
-const { APIError } = require('../utils/errorHandler');
-const { StatusCodes } = require('../utils/constants/statusCodes');
-const User = require('../modules/auth/models/User');
-const { Role } = require('../modules/auth/models/role/role.model');
-const Vendorb2b = require('../modules/auth/models/Vendor/B2bvendor.model');
-const Vendorb2c = require('../modules/auth/models/Vendor/B2cvendor.model');
-const Business = require('../modules/auth/models/Freelancer/freelancerbusiness.model');
-const Freelancer = require('../modules/auth/models/Freelancer/freelancer.model');
-const Customer = require('../modules/auth/models/Customer/customer.model');
+const jwt = require("jsonwebtoken");
+const { APIError } = require("../utils/errorHandler");
+const { StatusCodes } = require("../utils/constants/statusCodes");
 
+// MODELS
+const User = require("../modules/auth/models/User");
+const { Role } = require("../modules/auth/models/role/role.model");
 
-exports.createToken = (user, type = 'user') => {
+const Vendorb2b = require("../modules/auth/models/Vendor/B2bvendor.model");
+const Vendorb2c = require("../modules/auth/models/Vendor/B2cvendor.model");
+
+const Business = require("../modules/auth/models/Freelancer/freelancerbusiness.model");
+const Freelancer = require("../modules/auth/models/Freelancer/freelancer.model");
+const Customer = require("../modules/auth/models/Customer/customer.model");
+
+const { getUserPermissions } = require("./permission");
+
+/* ============================================================
+   CREATE TOKEN (FIXED & UNIFIED)
+============================================================ */
+exports.createToken = (user, type) => {
+  const detectedType =
+    type ||
+    (user.constructor?.modelName
+      ? user.constructor.modelName.toLowerCase()
+      : "user");
+
   const payload = {
     id: user._id,
     email: user.email,
-    type, // Add type to distinguish vendor vs user tokens
+    type: detectedType,
     role: {
-      code: user.role.code,
-      name: user.role.name,
-      isSuperAdmin: user.role.isSuperAdmin,
+      id: user.role?._id || null,
+      code: user.role?.code,
+      name: user.role?.name,
+      isSuperAdmin: user.role?.isSuperAdmin || false,
     },
   };
 
   return jwt.sign(payload, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRE || '30d',
+    expiresIn: process.env.JWT_EXPIRE || "30d",
   });
 };
 
-exports.protect = async (req, res, next) => {
+/* ============================================================
+   BASE PROTECT FUNCTION (REUSABLE)
+============================================================ */
+const protectBase = (Model, label) => async (req, res, next) => {
   try {
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
-
-    if (!token) {
-      throw new APIError('Not authorized to access this route', StatusCodes.UNAUTHORIZED);
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id).populate({
-      path: 'role',
-      model: Role,
-    });
-
-    if (!user || !user.isActive) {
-      throw new APIError('Not authorized to access this route', StatusCodes.UNAUTHORIZED);
-    }
-
-    req.user = user;
-    next();
-  } catch (error) {
-    next(error);
-  }
-};
-
-exports.protectFreelancer = async (req, res, next) => {
-  try {
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
-
-    if (!token) {
-      throw new APIError('Not authorized to access this route', StatusCodes.UNAUTHORIZED);
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-  
-
-    const freelancer = await Freelancer.findById(decoded.id).populate('role');
-
-    req.user = freelancer;
-    next();
-  } catch (error) {
-    next(error);
-  }
-};
-exports.protectBusiness = async (req, res, next) => {
-  try {
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
-
-    if (!token) {
-      throw new APIError('Not authorized to access this route', StatusCodes.UNAUTHORIZED);
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-  
-
-    const business = await Business.findById(decoded.id).populate('role');
-
-    req.user = business;
-    next();
-  } catch (error) {
-    next(error);
-  }
-};
-
-exports.protectVendorb2b = async (req, res, next) => {
-  try {
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
-
-    if (!token) {
-      throw new APIError('Not authorized to access this route', StatusCodes.UNAUTHORIZED);
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-  
-
-    const vendor = await Vendorb2b.findById(decoded.id).populate('role');
-
-    req.user = vendor;
-    next();
-  } catch (error) {
-    next(error);
-  }
-};
-
-exports.protectVendorb2c = async (req, res, next) => {
-  try {
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
-
-    if (!token) {
-      throw new APIError('Not authorized to access this route', StatusCodes.UNAUTHORIZED);
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-  
-
-    const vendor = await Vendorb2c.findById(decoded.id).populate('role');
-
-    req.user = vendor;
-    next();
-  } catch (error) {
-    next(error);
-  }
-};
-exports.protectCustomer = async (req, res, next) => {
-  try {
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
-
-    if (!token) {
-      throw new APIError('Not authorized to access this route', StatusCodes.UNAUTHORIZED);
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-  
-
-    const customer = await Customer.findById(decoded.id).populate('role');
-
-    req.user = customer;
-    next();
-  } catch (error) {
-    next(error);
-  }
-};
-
-// In protectMulti
-exports.protectMulti = async (req, res, next) => {
-  try {
-    let token = req.headers.authorization?.startsWith('Bearer') 
-      ? req.headers.authorization.split(' ')[1] 
+    const token = req.headers.authorization?.startsWith("Bearer")
+      ? req.headers.authorization.split(" ")[1]
       : null;
 
-    if (!token) throw new APIError('No token', StatusCodes.UNAUTHORIZED);
+    if (!token)
+      throw new APIError("No token provided", StatusCodes.UNAUTHORIZED);
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    const entity = await Model.findById(decoded.id).populate(
+      "role",
+      "name code level isSuperAdmin"
+    );
+
+    if (!entity)
+      throw new APIError(`${label} not found`, StatusCodes.UNAUTHORIZED);
+
+    if (entity.isActive === false)
+      throw new APIError(`${label} account inactive`, StatusCodes.UNAUTHORIZED);
+
+    req.user = entity;
+    next();
+  } catch (error) {
+    if (error.name === "JsonWebTokenError")
+      return next(new APIError("Invalid token", StatusCodes.UNAUTHORIZED));
+
+    if (error.name === "TokenExpiredError")
+      return next(new APIError("Token expired", StatusCodes.UNAUTHORIZED));
+
+    next(error);
+  }
+};
+
+/* ============================================================
+   SIMPLE PROTECTORS (SAME API AS BEFORE)
+============================================================ */
+exports.protect = protectBase(User, "User");
+exports.protectFreelancer = protectBase(Freelancer, "Freelancer");
+exports.protectBusiness = protectBase(Business, "Business");
+exports.protectVendorb2b = protectBase(Vendorb2b, "Vendor B2B");
+exports.protectVendorb2c = protectBase(Vendorb2c, "Vendor B2C");
+exports.protectCustomer = protectBase(Customer, "Customer");
+
+/* ============================================================
+   MULTI-ROLE PROTECTOR (FIXED)
+============================================================ */
+exports.protectMulti = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.startsWith("Bearer")
+      ? req.headers.authorization.split(" ")[1]
+      : null;
+
+    if (!token)
+      throw new APIError("No token provided", StatusCodes.UNAUTHORIZED);
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    const type = decoded.type?.toLowerCase().replace(/\s/g, "");
 
     const entityMap = {
       user: User,
@@ -188,34 +115,76 @@ exports.protectMulti = async (req, res, next) => {
       customer: Customer,
     };
 
-    const Model = entityMap[decoded.type];
-    if (!Model) throw new APIError('Invalid token type', StatusCodes.UNAUTHORIZED);
+    const Model = entityMap[type];
+    if (!Model)
+      throw new APIError(
+        `Invalid token type: ${decoded.type}`,
+        StatusCodes.UNAUTHORIZED
+      );
 
-    const entity = await Model.findById(decoded.id).populate('role');
-    if (!entity || !entity.isActive) throw new APIError('Unauthorized', StatusCodes.UNAUTHORIZED);
+    const entity = await Model.findById(decoded.id).populate(
+      "role",
+      "name code level isSuperAdmin"
+    );
 
-    // Cache permissions
-    entity.permissions = await exports.getUserPermissions(entity.role._id);
+    if (!entity)
+      throw new APIError("Unauthorized - entity not found", StatusCodes.UNAUTHORIZED);
+
+    if (!entity.role) {
+      entity.role = decoded.role || {
+        code: "guest",
+        name: "Guest",
+        level: 0,
+        isSuperAdmin: false,
+      };
+    }
+
+    if (entity.role?._id) {
+      try {
+        entity.permissions = await getUserPermissions(entity.role._id);
+      } catch {
+        entity.permissions = [];
+      }
+    }
+
     req.user = entity;
     next();
   } catch (error) {
+    if (error.name === "JsonWebTokenError")
+      return next(new APIError("Invalid token", StatusCodes.UNAUTHORIZED));
+
+    if (error.name === "TokenExpiredError")
+      return next(new APIError("Token expired", StatusCodes.UNAUTHORIZED));
+
     next(error);
   }
 };
 
-// authorize – use role.code
-exports.authorize = (options = {}) => {
+/* ============================================================
+   ROLE-BASED AUTHORIZATION
+============================================================ */
+exports.authorize = ({ roles = [], minLevel } = {}) => {
   return (req, res, next) => {
     try {
-      if (req.user.role.isSuperAdmin) return next();
+      const role =
+        req.user?.role || {
+          code: "guest",
+          name: "Guest",
+          level: 0,
+          isSuperAdmin: false,
+        };
 
-      if (options.minLevel && req.user.role.level < options.minLevel) {
-        throw new APIError('Insufficient role level', StatusCodes.FORBIDDEN);
-      }
+      if (role.isSuperAdmin) return next();
 
-      if (options.roles && !options.roles.includes(req.user.role.code)) {
-        throw new APIError(`Role not allowed: ${options.roles.join(', ')}`, StatusCodes.FORBIDDEN);
-      }
+      if (minLevel && role.level < minLevel)
+        throw new APIError("Insufficient role level", StatusCodes.FORBIDDEN);
+
+      if (
+        roles.length &&
+        !roles.includes(role.code) &&
+        !roles.includes(role.name)
+      )
+        throw new APIError("Role not allowed", StatusCodes.FORBIDDEN);
 
       next();
     } catch (error) {
