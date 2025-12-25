@@ -18,6 +18,8 @@ app.use(express.urlencoded({ extended: true }));
 require('./config/database');
 
 // Routes
+app.use('/freelancer/services', require('../src/modules/auth/routes/services/services.routes'));
+
 app.use('/platform', require('../src/modules/auth/routes/role/platform.routes'));
 app.use('/customer', require('../src/modules/auth/routes/customer.routes'));
 app.use('/ecommerce/v1', require('../src/modules/ecommerce/B2C/routes/cartOrderWishlist.route'));
@@ -34,7 +36,7 @@ app.use('/vendor/b2c', require('../src/modules/auth/routes/vendor/vendorb2c.rout
 app.use('/vendor/b2b', require('../src/modules/auth/routes/vendor/vendorb2b.routes'));
 app.use('/business', require('../src/modules/auth/routes/freelancer/freelancerbusiness.routes'));
 
-app.use('/freelancer', require('../src/modules/auth/routes/freelancer/freelancer.routes'));
+app.use('/freelancer/b2c', require('../src/modules/auth/routes/freelancer/freelancer.routes'));
 app.use('/attributes', require('../src/modules/ecommerce/B2C/routes/attribute.routes'));
 app.use('/materials', require('../src/modules/ecommerce/B2C/routes/material.routes'));
 app.use('/brands', require('../src/modules/ecommerce/B2C/routes/brand.routes'));
