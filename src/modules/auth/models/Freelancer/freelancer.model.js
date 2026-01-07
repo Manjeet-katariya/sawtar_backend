@@ -37,6 +37,33 @@ const service_schema = new mongoose.Schema({
   is_active: { type: Boolean, default: true }
 });
 
+const social_links_schema = new mongoose.Schema({
+  linkedin: {
+    type: String,
+    trim: true,
+  },
+  youtube: {
+    type: String,
+    trim: true,
+  },
+  instagram: {
+    type: String,
+    trim: true,
+  },
+  facebook: {
+    type: String,
+    trim: true,
+  },
+  twitter: {
+    type: String,
+    trim: true,
+  },
+  website: {
+    type: String,
+    trim: true
+  }
+}, { _id: false });
+
 const professional_schema = new mongoose.Schema({
   experience_years: { type: Number, min: 0 },
   bio: { type: String, trim: true, maxlength: 1000 },
@@ -107,7 +134,7 @@ const freelancer_schema = new mongoose.Schema({
 
   is_mobile_verified: { type: Boolean, default: false },
   profile_image: String,
-
+social_links: social_links_schema,
   professional: { type: professional_schema, required: true },
   languages: [{ type: String, trim: true }],
   location: location_schema,

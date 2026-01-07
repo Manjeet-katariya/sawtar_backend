@@ -117,42 +117,67 @@ exports.createFreelancer = asyncHandler(async (req, res) => {
 });
 
 
-
-// === GET ALL FREELANCERS (Admin) ===
 exports.getAllFreelancers = asyncHandler(async (req, res) => {
-  const { page = 1, limit, status, city, service } = req.query;
+  const { page = 1, limit, status, city, service, freelancerId } = req.query;
 
   const query = {};
 
+  // ✅ single freelancer
+  if (freelancerId) {
+    if (!mongoose.Types.ObjectId.isValid(freelancerId)) {
+      return res.status(StatusCodes.BAD_REQUEST).json({
+        success: false,
+        message: 'Invalid freelancer ID'
+      });
+    }
+    query._id = freelancerId;
+  }
+
   if (status !== undefined) query['status_info.status'] = Number(status);
   if (city) query['location.city'] = { $regex: city, $options: 'i' };
- if (service && mongoose.Types.ObjectId.isValid(service)) {
+  if (service && mongoose.Types.ObjectId.isValid(service)) {
     query['services_offered.service'] = service;
   }
 
   let freelancersQuery = Freelancer.find(query)
     .select('-password')
     .populate('role', 'name')
- .populate({
-        path: 'services_offered.service',
-        select: 'name description'
-      })    .populate('payment.preferred_currency', 'code symbol')
+    .populate({
+      path: 'services_offered.service',
+      select: 'name description'
+    })
+    .populate('payment.preferred_currency', 'code symbol')
     .sort({ createdAt: -1 });
 
   let pagination = null;
-  if (limit) {
+
+  if (limit && !freelancerId) {
     const pageNum = Math.max(Number(page), 1);
     const limitNum = Math.max(Number(limit), 1);
-    freelancersQuery = freelancersQuery.skip((pageNum - 1) * limitNum).limit(limitNum);
+
+    freelancersQuery = freelancersQuery
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum);
 
     const total = await Freelancer.countDocuments(query);
-    pagination = { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) };
+    pagination = {
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages: Math.ceil(total / limitNum)
+    };
   }
 
   const freelancers = await freelancersQuery.lean();
 
-  res.status(StatusCodes.OK).json({ success: true, freelancers, pagination });
+  res.status(StatusCodes.OK).json({
+    success: true,
+    freelancers,
+    pagination
+  });
 });
+
+
 // === GET PROFILE (Logged-in Freelancer) ===
 exports.getFreelancerProfile = asyncHandler(async (req, res) => {
   console.log(req.user.id)
@@ -303,6 +328,71 @@ exports.addRateCard = asyncHandler(async (req, res) => {
   });
 });
 
+// === UPLOAD / RE-UPLOAD DOCUMENT ===
+// === UPLOAD / RE-UPLOAD DOCUMENT (AFTER REJECTION) ===
+exports.updateDocument = asyncHandler(async (req, res) => {
+  const { documentId } = req.params;
+
+  if (!req.file) {
+    throw new APIError('File is required', StatusCodes.BAD_REQUEST);
+  }
+
+  const freelancer = await Freelancer.findById(req.user.id);
+  if (!freelancer) {
+    throw new APIError('Freelancer not found', StatusCodes.NOT_FOUND);
+  }
+
+  const doc = freelancer.documents.id(documentId);
+  if (!doc) {
+    throw new APIError('Document not found', StatusCodes.NOT_FOUND);
+  }
+
+  // ❌ Verified documents cannot be changed
+  if (doc.verified === true) {
+    throw new APIError(
+      'Verified document cannot be changed',
+      StatusCodes.FORBIDDEN
+    );
+  }
+
+  /* ===========================
+     RESET REJECTED DOCUMENT
+  ============================ */
+  doc.path = req.file.path;
+  doc.uploaded_at = new Date();
+
+  // 🔄 Reset verification state
+  doc.verified = false;
+  doc.verified_at = null;
+  doc.verified_by = null;
+  doc.reason = null;
+  doc.suggestion = null;
+
+  /* ===========================
+     ONBOARDING STATUS FIX
+  ============================ */
+  // If freelancer was rejected or profile incomplete due to doc
+  if (
+    freelancer.onboarding_status === 'rejected' ||
+    freelancer.onboarding_status === 'profile_incomplete'
+  ) {
+    freelancer.onboarding_status = 'profile_submitted';
+  }
+
+  /* ===========================
+     META HISTORY
+  ============================ */
+
+  await freelancer.save();
+
+  res.status(StatusCodes.OK).json({
+    success: true,
+    message: 'Document re-uploaded successfully. Awaiting verification.',
+    onboarding_status: freelancer.onboarding_status,
+    document: doc,
+  });
+});
+
 // === ADMIN: UPDATE STATUS ===
 exports.updateFreelancerStatus = asyncHandler(async (req, res) => {
   const { id } = req.params;
@@ -329,5 +419,28 @@ exports.updateFreelancerStatus = asyncHandler(async (req, res) => {
     success: true,
     message: 'Status updated',
     onboarding_status: freelancer.onboarding_status
+  });
+});
+exports.updateDocumentVerification = asyncHandler(async (req, res) => {
+  const { freelancerId, documentId, verified, reason, suggestion } = req.body;
+
+  const freelancer = await Freelancer.findById(freelancerId);
+  if (!freelancer) throw new APIError('Freelancer not found', StatusCodes.NOT_FOUND);
+
+  const doc = freelancer.documents.id(documentId);
+  if (!doc) throw new APIError('Document not found', StatusCodes.NOT_FOUND);
+
+  doc.verified = Boolean(verified);
+  doc.reason = verified ? null : (reason || 'Invalid document');
+  doc.suggestion = verified ? null : (suggestion || 'Please re-upload correct file');
+
+ 
+
+  await freelancer.save();
+
+  res.json({
+    success: true,
+    message: verified ? 'Document approved' : 'Document rejected',
+    document: doc,
   });
 });

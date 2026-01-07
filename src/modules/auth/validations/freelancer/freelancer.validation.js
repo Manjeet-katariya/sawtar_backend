@@ -15,8 +15,10 @@ const validate = (req, res, next) => {
   next();
 };
 
-const isValidId = (value, field) => {
-  if (!mongoose.Types.ObjectId.isValid(value)) throw new Error(`${field} is invalid`);
+const isValidObjectId = (value, fieldName) => {
+  if (!mongoose.Types.ObjectId.isValid(value)) {
+    throw new Error(`${fieldName} must be a valid MongoDB ObjectId`);
+  }
   return true;
 };
 

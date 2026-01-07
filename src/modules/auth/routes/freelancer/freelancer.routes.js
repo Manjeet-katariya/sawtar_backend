@@ -33,14 +33,14 @@ router.get('/',protectMulti, validateGetAllFreelancers, controller.getAllFreelan
 router.put('/profile', docUpload,protectFreelancer, controller.updateFreelancerProfile);
 router.put('/rate-card',protectFreelancer , controller.addRateCard);
 
-// router.put(
-//   '/document/:documentId',
-//   upload.single('file'),protectFreelancer, // single file
-//   controller.updateDocument
-// );
+router.put(
+  '/document/:documentId',
+  upload.single('file'),protectFreelancer, // single file
+  controller.updateDocument
+);
 // ADMIN → ALL FREELANCERS SUBMODULE
 router.use(protect, checkPermission('Freelancers', 'view', 'All Freelancers'));
-// router.put('/document/verification/check', controller.updateDocumentVerification);
+router.put('/document/verification/check', controller.updateDocumentVerification);
 router.put('/:id/status', checkPermission('Freelancers', 'update', 'All Freelancers'), validateFreelancerId, validateUpdateFreelancerStatus, controller.updateFreelancerStatus);
 // router.delete('/:id', checkPermission('Freelancers', 'delete', 'All Freelancers'), validateFreelancerId, controller.deleteFreelancer);
 

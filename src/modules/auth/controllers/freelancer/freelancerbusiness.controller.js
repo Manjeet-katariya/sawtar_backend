@@ -64,182 +64,100 @@ exports.businessLogin = asyncHandler(async (req, res, next) => {
   }
 });
 
-// Create Business
-exports.createBusiness = asyncHandler(async (req, res, next) => {
-  const businessData = req.body;
+exports.createBusiness = asyncHandler(async (req, res) => {
+  const data = req.body;
 
-  // Validate required fields
-  if (!businessData.email) {
-    throw new APIError('Email is required', StatusCodes.BAD_REQUEST);
-  }
-
-  // Check duplicate business
-  const existingBusiness = await BusinessRegistration.findOne({
+  /* ================= DUPLICATE CHECK ================= */
+  const existing = await BusinessRegistration.findOne({
     $or: [
-      { email: businessData.email.toLowerCase().trim() },
-      { mobile: businessData.mobile }
+      { email: data.email },
+      {
+        'mobile.country_code': data.mobile?.country_code,
+        'mobile.number': data.mobile?.number
+      }
     ]
   });
 
-  if (existingBusiness) {
-    if (existingBusiness.email === businessData.email.toLowerCase().trim()) {
-      logger.warn(`Business creation failed: Duplicate email - ${businessData.email}`);
-      throw new APIError('Business email already exists', StatusCodes.CONFLICT);
+  if (existing) {
+    throw new APIError(
+      'Email or mobile number already exists',
+      StatusCodes.CONFLICT
+    );
+  }
+
+  /* ================= MOBILE VERIFICATION ================= */
+  if (!data.is_mobile_verified) {
+    throw new APIError(
+      'Mobile number must be verified',
+      StatusCodes.BAD_REQUEST
+    );
+  }
+
+  /* ================= CATEGORY VALIDATION ================= */
+  if (!Array.isArray(data.categories) || data.categories.length === 0) {
+    throw new APIError(
+      'At least one business category is required',
+      StatusCodes.BAD_REQUEST
+    );
+  }
+
+  /* ================= SERVICES VALIDATION ================= */
+  if (data.services && !Array.isArray(data.services)) {
+    throw new APIError(
+      'Services must be an array',
+      StatusCodes.BAD_REQUEST
+    );
+  }
+
+  /* ================= LOCATION VALIDATION ================= */
+  if (!data.location || !data.location.city) {
+    throw new APIError(
+      'Business city is required',
+      StatusCodes.BAD_REQUEST
+    );
+  }
+
+  /* ================= PREPARE DATA ================= */
+  data.password = await bcrypt.hash(data.password, 10);
+
+  // Initial system fields
+  data.onboarding_status = 'registered';
+  data.is_active = false;
+
+  data.documents = [];
+  data.performance = {};
+  data.status_info = [
+    {
+      status: 'registered',
+      updated_at: new Date()
     }
-    if (existingBusiness.mobile === businessData.mobile) {
-      logger.warn(`Business creation failed: Duplicate mobile - ${businessData.mobile}`);
-      throw new APIError('Business mobile number already exists', StatusCodes.CONFLICT);
+  ];
+
+  // Optional arrays default
+  data.services = data.services || [];
+  data.projects = data.projects || [];
+  data.contacts = data.contacts || [];
+  data.gallery = data.gallery || [];
+  data.videos = data.videos || [];
+  data.payment_modes = data.payment_modes || [];
+
+  /* ================= CREATE BUSINESS ================= */
+  const business = await BusinessRegistration.create(data);
+
+  /* ================= RESPONSE ================= */
+  res.status(StatusCodes.CREATED).json({
+    success: true,
+    message: 'Business registered successfully. Awaiting admin approval.',
+    business: {
+      _id: business._id,
+      business_name: business.business_name,
+      email: business.email,
+      categories: business.categories,
+      onboarding_status: business.onboarding_status,
+      is_active: business.is_active,
+      createdAt: business.createdAt
     }
-  }
-
-  // Mobile verification check
-  if (!businessData.is_mobile_verified) {
-    throw new APIError('Mobile must be verified', StatusCodes.BAD_REQUEST);
-  }
-
-  const businessRole = await Role.findOne({ name: 'Freelancer-Business' });
-  if (!businessRole) {
-    throw new APIError('Business role not available', StatusCodes.NOT_FOUND);
-  }
-  businessData.role = businessRole._id;
-
-  // Ensure status_info exists
-  businessData.status_info = businessData.status_info || {};
-  businessData.status_info.status = 0; // 0 = pending
-
-  // Hash password
-  businessData.password = await bcrypt.hash(businessData.password, 10);
-
-  // Parse categories if sent as string
-  if (businessData.store_details && businessData.store_details.categories) {
-    let parsedCategories = businessData.store_details.categories;
-    if (typeof parsedCategories === 'string') {
-      try {
-        parsedCategories = JSON.parse(parsedCategories);
-        businessData.store_details.categories = parsedCategories;
-      } catch (error) {
-        throw new APIError('Invalid categories format', StatusCodes.BAD_REQUEST);
-      }
-    }
-
-    // Validate categories structure
-    if (!Array.isArray(businessData.store_details.categories) ||
-        businessData.store_details.categories.length === 0) {
-      throw new APIError('At least one category is required', StatusCodes.BAD_REQUEST);
-    }
-
-    for (const category of businessData.store_details.categories) {
-      if (!category.name || typeof category.name !== 'string') {
-        throw new APIError('Each category must have a valid name', StatusCodes.BAD_REQUEST);
-      }
-    }
-  }
-
-  // Handle logo upload
-  if (req.files && req.files.logo) {
-    businessData.store_details = businessData.store_details || {};
-    businessData.store_details.logo = req.files.logo[0].path;
-  }
-
-  // Handle uploaded documents
-  businessData.documents = {};
-
-  if (req.files) {
-    const fileHandlers = {
-      identityProof: () => {
-        businessData.documents.identity_proof = {
-          type: 'identity_proof',
-          path: req.files.identityProof[0].path,
-          verified: false,
-          uploaded_at: new Date()
-        };
-      },
-      addressProof: () => {
-        businessData.documents.address_proof = {
-          type: 'address_proof',
-          path: req.files.addressProof[0].path,
-          verified: false,
-          uploaded_at: new Date()
-        };
-      },
-      gstCertificate: () => {
-        businessData.documents.gst_certificate = {
-          type: 'gst_certificate',
-          path: req.files.gstCertificate[0].path,
-          verified: false,
-          uploaded_at: new Date()
-        };
-      },
-      businessLicense: () => {
-        businessData.documents.business_license = {
-          type: 'business_license',
-          path: req.files.businessLicense[0].path,
-          verified: false,
-          uploaded_at: new Date()
-        };
-      }
-    };
-
-    Object.keys(req.files).forEach(fileType => {
-      if (fileHandlers[fileType]) {
-        fileHandlers[fileType]();
-      }
-    });
-  }
-
-  // Validate at least one document is provided
-  const hasDocuments = Object.keys(businessData.documents).some(key => {
-    const doc = businessData.documents[key];
-    return doc !== undefined;
   });
-
-  if (!hasDocuments) {
-    throw new APIError('At least one document is required', StatusCodes.BAD_REQUEST);
-  }
-
-  try {
-    // Create business
-    const business = await BusinessRegistration.create(businessData);
-
-    // Log creation in change history
-    business.meta.change_history = business.meta.change_history || [];
-    business.meta.change_history.push({
-      updated_by: req.user?._id || null, // If created by admin, req.user may be available
-      updated_at: new Date(),
-      changes: ['Business created']
-    });
-    await business.save();
-
-    logger.info(`Business created successfully: ${business._id}`);
-
-    res.status(StatusCodes.CREATED).json({
-      success: true,
-      message: 'Business created successfully',
-      data: {
-        business: {
-          id: business._id,
-          email: business.email,
-          full_name: business.full_name,
-          store_details: business.store_details,
-          status: business.status_info.status
-        }
-      }
-    });
-  } catch (error) {
-    logger.error(`Business creation failed: ${error.message}`);
-
-    if (error.name === 'ValidationError') {
-      const errors = Object.values(error.errors).map(err => err.message);
-      throw new APIError(`Validation failed: ${errors.join(', ')}`, StatusCodes.BAD_REQUEST);
-    }
-
-    if (error.code === 11000) {
-      const field = Object.keys(error.keyValue)[0];
-      throw new APIError(`${field} already exists`, StatusCodes.CONFLICT);
-    }
-
-    throw new APIError('Server error while creating business', StatusCodes.INTERNAL_SERVER_ERROR);
-  }
 });
 
 // Get All Businesses
